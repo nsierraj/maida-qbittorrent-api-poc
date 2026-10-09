@@ -112,3 +112,40 @@ def parse(data: bytes) -> TorrentFile:
         size=size,
         webseeds=tuple(s.decode("utf-8", "replace") for s in seeds if isinstance(s, bytes)),
     )
+
+
+def fetch(url: str, *, timeout: float = 30) -> TorrentFile:
+    """Download a .torrent file over http(s) (at most MAX_TORRENT_BYTES) and parse it."""
+    import requests
+
+    if not url.startswith(("http://", "https://")):
+        raise TorrentFileError("Only http(s) URLs of .torrent files can be fetched.")
+    try:
+        with requests.get(url, timeout=timeout, stream=True) as resp:
+            resp.raise_for_status()
+            data = b""
+            for chunk in resp.iter_content(64 * 1024):
+                data += chunk
+                if len(data) > MAX_TORRENT_BYTES:
+                    raise TorrentFileError("Larger than any sensible .torrent file.")
+    except requests.RequestException as e:
+        raise TorrentFileError(f"Couldn't download {url}: {e}") from e
+    return parse(data)
+
+
+def identify(source: str) -> tuple[str, str, TorrentFile | None]:
+    """(info hash, display name, parsed file or None) for a magnet link or a .torrent URL, before
+    adding it: torrents/add answers before the torrent exists, so callers need the hash first."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from .webui import magnet_hash
+
+    source = source.strip()
+    if source.startswith("magnet:"):
+        h = magnet_hash(source)
+        names = parse_qs(urlsplit(source).query).get("dn", [])
+        return h, names[0] if names else h, None
+    if source.startswith(("http://", "https://")):
+        meta = fetch(source)
+        return meta.info_hash, meta.name, meta
+    raise TorrentFileError("Give a magnet link or an http(s) URL of a .torrent file.")

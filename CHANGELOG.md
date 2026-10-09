@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 ## [Unreleased]
 
 ### Added
+- Stage 4, the `qbittorrent_mcp` MCP server (`qbittorrent-mcp`, stdio).
+  - Six read tools: server info, a paged torrent list, torrent details, categories and tags, "what changed" via `sync/maindata`, and the log.
+  - Nine change tools behind `QBT_MCP_ALLOW_WRITES`: add, stop, start, recheck, category, add/remove tags, rename, move.
+  - `qbt_delete_torrents` behind `QBT_MCP_ALLOW_DELETE` too.
+  - Two prompts.
+  - Every change goes through `Sandbox`. Verified over stdio against the real server: reads, a refused move, and add → start → details → delta → stop → delete.
+- `torrentfile.fetch()` and `torrentfile.identify()`: identify a magnet or `.torrent` URL before adding (shared by the example and the MCP server). `Sandbox.wait_settled()` and `TRANSIENT_STATES`.
+- `docs/mcp-server.md`: setup with Claude Code, tools, safety model, troubleshooting, adding a tool.
 - `qbittorrent_poc.torrentfile`: reads a `.torrent` file's info hash (SHA-1 of the info dictionary; truncated SHA-256 for v2-only), name, size and web seeds, so a torrent added by URL can be identified before it appears. Verified against the hash Arch Linux publishes for 2026.10.01.
 - Stage 3, changes inside a sandbox: raw `WebUI` writes (`add`, `stop`, `start`, `recheck`, `reannounce`, categories, tags, `rename`, `set_location`, `delete`) and `magnet_hash()`.
 - `TorrentPolicy` and `Sandbox`: every change is refused locally unless the torrents carry the sandbox tag and paths stay inside the sandbox save path; writes and deletes are separate opt-ins; `add` always applies the tag; `wait_for()` and `cleanup()`. `add()` always sends `autoTMM=false`, because Automatic Torrent Management would otherwise ignore the save path.
@@ -27,6 +35,7 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 - `docs/qbittorrent/reference-compose.yml`: redacted copy of the qBittorrent + gluetun compose project on the NAS, for networking context.
 
 ### Changed
+- `find_torrents()`/`resolve_hash()`: an exact name now wins over substring matches, after an exact hash.
 - Verified Stages 2 and 3 on the real server (errata E11–E21). The fake now follows it:
   - `torrents/add` answers JSON, and `.torrent` URLs are pending.
   - New torrents pass through `checkingResumeData`, and a recheck goes through `checkingDL`.

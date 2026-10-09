@@ -15,6 +15,10 @@ from .policy import PolicyError, TorrentPolicy
 from .webui import WebUI, join_hashes
 
 
+# States a torrent passes through after torrents/add or a recheck before it settles (5.2.3).
+TRANSIENT_STATES = frozenset({"checkingResumeData", "allocating", "checkingDL", "checkingUP", "moving", "unknown"})
+
+
 def _as_list(hashes: str | Iterable[str]) -> list[str]:
     if isinstance(hashes, str):
         return [h for h in hashes.split("|") if h]
@@ -110,6 +114,13 @@ class Sandbox:
                 raise TimeoutError(f"Torrent {torrent_hash[:8]} didn't reach the expected state in {timeout:g}s.")
             time.sleep(interval)
 
+    def wait_settled(self, torrent_hash: str, *, timeout: float = 60, **kwargs: Any) -> dict[str, Any]:
+        """Wait until the torrent exists and is past checking/allocating/moving."""
+        row = self.wait_for(torrent_hash, lambda r: r is not None and r["state"] not in TRANSIENT_STATES,
+                            timeout=timeout, **kwargs)
+        assert row is not None
+        return row
+
     # -- cleanup -----------------------------------------------------------------------------------
     def cleanup(self, *, delete_files: bool = True, extra_tags: Iterable[str] = (),
                 categories: Iterable[str] = ()) -> dict[str, Any]:
@@ -131,4 +142,4 @@ class Sandbox:
         return {"torrents": hashes, "tags": tags, "categories": removable}
 
 
-__all__ = ["PolicyError", "QbtError", "Sandbox", "TorrentPolicy"]
+__all__ = ["TRANSIENT_STATES", "PolicyError", "QbtError", "Sandbox", "TorrentPolicy"]

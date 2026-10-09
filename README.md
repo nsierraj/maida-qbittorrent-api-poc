@@ -6,6 +6,7 @@ Synology NAS. Sibling of [maida-synology-api-poc](https://github.com/nsierraj/ma
 
 | Doc | Contents |
 | --- | --- |
+| [docs/mcp-server.md](docs/mcp-server.md) | The MCP server: setup with Claude Code, tools, safety model, troubleshooting |
 | [docs/use-cases.md](docs/use-cases.md) | Use cases verified on the real server: calls, parameters, quirks, library method |
 | [docs/qbittorrent/webui-api.md](docs/qbittorrent/webui-api.md) | Condensed API reference for the endpoints used here, plus errata against the wiki |
 | [docs/qbittorrent/reference-compose.yml](docs/qbittorrent/reference-compose.yml) | How qBittorrent is deployed on the NAS (redacted compose), for networking context |
@@ -18,8 +19,8 @@ Synology NAS. Sibling of [maida-synology-api-poc](https://github.com/nsierraj/ma
 | 1 | Discovery, read-only: versions, transfer stats, torrent list, categories, tags | done, verified on the NAS 2026-10-09 |
 | 2 | Per-torrent detail: properties, files, trackers, peers, log, sync | done, verified on the NAS 2026-10-09 |
 | 3 | Control inside a sandbox tag: add, stop/start, recheck, category, tags, location, rename, delete | done, verified on the NAS 2026-10-09 |
-| 4 | MCP server over stdio, wired into Claude Code | next |
-| 5 | HTTP transport, Docker image, Container Manager, reverse proxy | |
+| 4 | MCP server over stdio, wired into Claude Code | done, verified on the NAS 2026-10-09 |
+| 5 | HTTP transport, Docker image, Container Manager, reverse proxy | next |
 
 ## Setup
 
@@ -51,6 +52,14 @@ uv run examples/03_lifecycle.py --cleanup
 
 **Run the probe once.** It sends one missing and one wrong key on purpose. qBittorrent bans an IP for an hour (Web UI options) after 5 failed attempts by default. Before retrying any example after a 401/403, check `QBT_API_KEY` in `.env`; if you do get locked out, the ban clears when it expires.
 
+## MCP server
+
+```bash
+claude mcp add qbittorrent -- uv run --directory "$PWD" qbittorrent-mcp
+```
+
+Read-only by default. `QBT_MCP_ALLOW_WRITES=true` adds the change tools, and `QBT_MCP_ALLOW_DELETE=true` the delete tool, always limited to the sandbox. See [docs/mcp-server.md](docs/mcp-server.md).
+
 ## Tests
 
 ```bash
@@ -73,4 +82,5 @@ CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11–3.13 for every p
 - `src/qbittorrent_poc/fields.py`: reference field sets per endpoint and `diff_fields()`, which the examples use to report what the real server adds or drops.
 - `src/qbittorrent_poc/samples.py`: redaction for everything examples save or print.
 - `src/qbittorrent_poc/fmt.py`: sizes, speeds, durations and timestamps for humans.
+- `src/qbittorrent_mcp/server.py`: the MCP server (`qbittorrent-mcp`).
 - `tests/fake_qbt.py`: the fake server; `tests/test_*.py`: the suites.

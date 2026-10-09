@@ -260,5 +260,5 @@ def test_03_unreadable_torrent_url(env, monkeypatch):
     with pytest.raises(SystemExit, match="Couldn't read the test torrent"):
         run("03_lifecycle.py", monkeypatch=monkeypatch)
     monkeypatch.setenv("QBT_TEST_TORRENT", "ftp://example.org/x.torrent")
-    with pytest.raises(SystemExit, match="magnet link or an http"):
+    with pytest.raises(SystemExit, match="magnet link or an http"):  # from torrentfile.identify
         run("03_lifecycle.py", monkeypatch=monkeypatch)

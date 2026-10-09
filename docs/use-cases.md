@@ -9,21 +9,21 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 
 | ID | Use case | Library method | Example | MCP tool | Safety | Verified on NAS |
 | --- | --- | --- | --- | --- | --- | --- |
-| UC-01 | Connect, authenticate, versions | `connect()`, `app_version()`, `webapi_version()`, `build_info()` | 00, 01 | – | read | 2026-10-09 |
-| UC-02 | Global transfer state | `transfer_info()`, `alt_speed_limits_enabled()`, `default_save_path()` | 01 | – | read | 2026-10-09 |
-| UC-03 | List and filter torrents | `list_torrents()` | 01 | – | read | 2026-10-09 |
-| UC-04 | Categories and tags | `categories()`, `tags()` | 01 | – | read | 2026-10-09 |
-| UC-05 | Find a torrent by name or hash prefix | `find_torrents()`, `resolve_hash()` | 02 | – | read | 2026-10-09 |
-| UC-06 | Torrent details: properties, files, trackers | `properties()`, `files()`, `trackers()`, `webseeds()` | 02 | – | read | 2026-10-09 |
-| UC-07 | Peers of a torrent | `peers()` | 02 | – | read | 2026-10-09 |
-| UC-08 | Incremental sync ("what changed?") | `maindata()` | 02 | – | read | 2026-10-09 |
-| UC-09 | Application log | `main_log()` | 02 | – | read | 2026-10-09 |
-| UC-10 | Add a torrent (magnet/URL) | `Sandbox.add()` → `add()` | 03 | – | write | 2026-10-09 |
-| UC-11 | Stop, start, recheck, reannounce | `Sandbox.stop/start/recheck/reannounce()` | 03 | – | write | 2026-10-09 |
-| UC-12 | Categories | `Sandbox.ensure_category/set_category()` | 03 | – | write | 2026-10-09 |
-| UC-13 | Tags | `Sandbox.add_tags/remove_tags()` | 03 | – | write | 2026-10-09 |
-| UC-14 | Rename and move | `Sandbox.rename/set_location()` | 03 | – | write | 2026-10-09 |
-| UC-15 | Delete (optionally with data) | `Sandbox.delete/cleanup()` | 03 | – | destructive | 2026-10-09 |
+| UC-01 | Connect, authenticate, versions | `connect()`, `app_version()`, `webapi_version()`, `build_info()` | 00, 01 | `qbt_server_info` | read | 2026-10-09 |
+| UC-02 | Global transfer state | `transfer_info()`, `alt_speed_limits_enabled()`, `default_save_path()` | 01 | `qbt_server_info` | read | 2026-10-09 |
+| UC-03 | List and filter torrents | `list_torrents()` | 01 | `qbt_list_torrents` | read | 2026-10-09 |
+| UC-04 | Categories and tags | `categories()`, `tags()` | 01 | `qbt_list_categories_and_tags` | read | 2026-10-09 |
+| UC-05 | Find a torrent by name or hash prefix | `find_torrents()`, `resolve_hash()` | 02 | (every tool's torrent identifiers) | read | 2026-10-09 |
+| UC-06 | Torrent details: properties, files, trackers | `properties()`, `files()`, `trackers()`, `webseeds()` | 02 | `qbt_torrent_details` | read | 2026-10-09 |
+| UC-07 | Peers of a torrent | `peers()` | 02 | `qbt_torrent_details` (summary) | read | 2026-10-09 |
+| UC-08 | Incremental sync ("what changed?") | `maindata()` | 02 | `qbt_whats_changed` | read | 2026-10-09 |
+| UC-09 | Application log | `main_log()` | 02 | `qbt_main_log` | read | 2026-10-09 |
+| UC-10 | Add a torrent (magnet/URL) | `Sandbox.add()` → `add()` | 03 | `qbt_add_torrent` | write | 2026-10-09 |
+| UC-11 | Stop, start, recheck, reannounce | `Sandbox.stop/start/recheck/reannounce()` | 03 | `qbt_stop/start/recheck_torrents` | write | 2026-10-09 |
+| UC-12 | Categories | `Sandbox.ensure_category/set_category()` | 03 | `qbt_set_category` | write | 2026-10-09 |
+| UC-13 | Tags | `Sandbox.add_tags/remove_tags()` | 03 | `qbt_add_tags`, `qbt_remove_tags` | write | 2026-10-09 |
+| UC-14 | Rename and move | `Sandbox.rename/set_location()` | 03 | `qbt_rename_torrent`, `qbt_move_torrents` | write | 2026-10-09 |
+| UC-15 | Delete (optionally with data) | `Sandbox.delete/cleanup()` | 03 | `qbt_delete_torrents` | destructive | 2026-10-09 |
 
 ---
 
@@ -72,7 +72,7 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 ## UC-05: Find a torrent by name or hash prefix
 
 - **Calls:** `GET torrents/info` (no search endpoint exists); matching happens in the library.
-- **Rules:** an exact hash wins; otherwise a case-insensitive hash prefix or name substring. `resolve_hash()` refuses no match or several matches and lists up to five candidates, which is the behavior an MCP tool needs before acting on a torrent.
+- **Rules:** an exact hash wins, then an exact name (case-insensitive); otherwise a case-insensitive hash prefix or name substring. `resolve_hash()` refuses no match or several matches and lists up to five candidates, which is the behavior an MCP tool needs before acting on a torrent.
 
 ## UC-06: Torrent details
 
