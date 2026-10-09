@@ -36,16 +36,21 @@ def test_00_probe_auth(env, monkeypatch, capsys):
     assert API_KEY not in out
     assert "key accepted" in out
     assert "auth required (expected)" in out
-    assert "CSRF check applies to API keys" in out
-    assert "host header validation rejects" in out
-    assert "method enforced (expected)" in out
+    assert "wrong key refused (expected)" in out
+    # As observed on the real server (2026-10-09):
+    assert "CSRF check skipped for API keys" in out
+    assert "container names accepted" in out
+    assert "GET endpoints also accept POST" in out
     assert "| Probe | HTTP | Meaning |" in out
 
 
-def test_00_probe_auth_csrf_skipped(env, monkeypatch, capsys):
-    env.csrf_with_api_key = False
+def test_00_probe_auth_strict_server(env, monkeypatch, capsys):
+    env.csrf_with_api_key = True
+    env.host_header_validation = True
     run("00_probe_auth.py", monkeypatch=monkeypatch)
-    assert "CSRF check skipped for API keys" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "CSRF check applies to API keys" in out
+    assert "host header validation rejects" in out
 
 
 def test_01_discover(env, monkeypatch, capsys, tmp_path):
@@ -55,8 +60,11 @@ def test_01_discover(env, monkeypatch, capsys, tmp_path):
     assert "qBittorrent : v5.2.3" in out and "WebAPI      : 2.15.1" in out
     assert "5 in total" in out
     assert "stoppedDL" in out and "stoppedUP" in out
-    assert "fields not in the wiki : none" in out
+    assert "new fields             : none" in out
     assert "sandbox tag 'poc': not created yet" in out
+    assert "external IP : 203.0.113.7" in out
+    assert "web_ui_max_auth_fail_count" in out
+    assert "fake-password-hash" not in out and "fake-proxy-secret" not in out
 
     samples = tmp_path / "out" / "samples"
     torrents = json.loads((samples / "torrents_info.json").read_text())
@@ -65,13 +73,26 @@ def test_01_discover(env, monkeypatch, capsys, tmp_path):
     for t in env.torrents:  # no real names, hashes or paths leak into the samples
         assert t["name"] not in raw and t["hash"] not in raw and t["save_path"] not in raw
     assert {t["name"] for t in torrents} == {f"torrent-{i:03d}" for i in range(1, 6)}
+    transfer = (samples / "transfer_info.json").read_text()
+    assert "203.0.113.7" not in transfer and "<redacted>" in transfer
+
+
+def test_01_discover_empty_out_setting_means_out(env, monkeypatch, capsys, tmp_path):
+    # .env.example has `QBT_POC_OUT=`; an empty value once wrote samples/ into the repo root.
+    monkeypatch.setenv("QBT_POC_OUT", "")
+    monkeypatch.chdir(tmp_path)
+    run("01_discover.py", monkeypatch=monkeypatch)
+    assert (tmp_path / "out" / "samples" / "torrents_info.json").exists()
+    assert not (tmp_path / "samples").exists()
 
 
 def test_01_discover_reports_new_fields(env, monkeypatch, capsys):
     for t in env.torrents:
-        t["has_metadata"] = True
+        t["brand_new_field"] = 1
+        del t["popularity"]
     env.torrents[0]["state"] = "brandNewState"
     run("01_discover.py", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
-    assert "fields not in the wiki : has_metadata" in out
-    assert "undocumented states    : brandNewState" in out
+    assert "new fields             : brand_new_field" in out
+    assert "fields not sent        : popularity" in out
+    assert "unknown states         : brandNewState" in out

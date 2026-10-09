@@ -10,16 +10,30 @@ from typing import Any
 
 from .client import QbtClient
 
-# torrents/info fields documented on the wiki (5.0). examples/01_discover.py reports any the
-# real server adds or drops.
+# torrents/info fields, as sent by the real server (qBittorrent 5.2.3, WebAPI 2.15.1, recorded
+# 2026-10-09). The wiki (5.0) lists fewer and says `isPrivate`; 5.2.3 sends `private` instead.
+# examples/01_discover.py reports any difference.
 TORRENT_FIELDS = (
-    "added_on", "amount_left", "auto_tmm", "availability", "category", "completed", "completion_on",
-    "content_path", "dl_limit", "dlspeed", "downloaded", "downloaded_session", "eta", "f_l_piece_prio",
-    "force_start", "hash", "isPrivate", "last_activity", "magnet_uri", "max_ratio", "max_seeding_time",
-    "name", "num_complete", "num_incomplete", "num_leechs", "num_seeds", "priority", "progress", "ratio",
-    "ratio_limit", "reannounce", "save_path", "seeding_time", "seeding_time_limit", "seen_complete",
-    "seq_dl", "size", "state", "super_seeding", "tags", "time_active", "total_size", "tracker",
-    "up_limit", "uploaded", "uploaded_session", "upspeed",
+    "added_on", "amount_left", "auto_tmm", "availability", "category", "comment", "completed",
+    "completion_on", "connections_count", "connections_limit", "content_path", "created_by",
+    "creation_date", "dl_limit", "dlspeed", "download_path", "downloaded", "downloaded_session",
+    "eta", "f_l_piece_prio", "force_start", "has_metadata", "hash", "inactive_seeding_time_limit",
+    "infohash_v1", "infohash_v2", "last_activity", "magnet_uri", "max_inactive_seeding_time",
+    "max_ratio", "max_seeding_time", "name", "num_complete", "num_incomplete", "num_leechs",
+    "num_seeds", "piece_size", "pieces_have", "pieces_num", "popularity", "priority", "private",
+    "progress", "ratio", "ratio_limit", "reannounce", "root_path", "save_path", "seeding_time",
+    "seeding_time_limit", "seen_complete", "seq_dl", "share_limit_action", "size", "state",
+    "super_seeding", "tags", "time_active", "total_size", "total_wasted", "tracker",
+    "trackers_count", "up_limit", "uploaded", "uploaded_session", "upspeed",
+)
+
+# app/preferences keys that explain how the WebUI treats requests. Never return preferences
+# wholesale: they include secrets (proxy and SMTP passwords, the WebUI password hash).
+WEBUI_SECURITY_PREFS = (
+    "web_ui_port", "web_ui_host_header_validation_enabled", "web_ui_domain_list",
+    "web_ui_csrf_protection_enabled", "web_ui_clickjacking_protection_enabled",
+    "bypass_local_auth", "bypass_auth_subnet_whitelist_enabled", "web_ui_max_auth_fail_count",
+    "web_ui_ban_duration", "web_ui_session_timeout", "use_https", "web_ui_reverse_proxy_enabled",
 )
 
 # Torrent `state` values in qBittorrent 5.x (the wiki still says pausedUP/pausedDL).
@@ -65,6 +79,11 @@ class WebUI:
     def default_save_path(self) -> str:
         return self.client.get("app/defaultSavePath")
 
+    def webui_security_settings(self) -> dict[str, Any]:
+        """The WebUI's request checks and ban settings (a safe subset of app/preferences)."""
+        prefs = self.client.get("app/preferences")
+        return {k: prefs[k] for k in WEBUI_SECURITY_PREFS if k in prefs}
+
     # -- UC-02: global transfer state -------------------------------------------
     def transfer_info(self) -> dict[str, Any]:
         return self.client.get("transfer/info")
@@ -102,7 +121,8 @@ class WebUI:
 
     # -- UC-04: categories and tags ------------------------------------------------
     def categories(self) -> dict[str, dict[str, Any]]:
-        """{name: {name, savePath, ...}}."""
+        """{name: {name, savePath, download_path, ratio_limit, seeding_time_limit,
+        inactive_seeding_time_limit, share_limit_action}}. savePath "" = the default save path."""
         return self.client.get("torrents/categories")
 
     def tags(self) -> list[str]:

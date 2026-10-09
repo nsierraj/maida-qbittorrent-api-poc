@@ -1,15 +1,18 @@
 """In-memory stand-in for the qBittorrent 5.x WebUI API, patched into requests.Session.request.
 
-It models the documented behavior (docs/qbittorrent/webui-api.md) plus qBittorrent's request
-checks as implemented in its source (webapplication.cpp):
+It models the behavior observed on the real server (qBittorrent 5.2.3, WebAPI 2.15.1, probed
+2026-10-09 with examples/00_probe_auth.py and 01_discover.py; see webui-api.md §8):
 
-- API key auth: `Authorization: Bearer <key>`; anything else gets 403 "Forbidden".
-- Host header validation: IP literals and localhost pass; other names must be in
-  `server_domains`, else 401 "Unauthorized".
-- CSRF protection: a Referer or Origin whose host:port differs from Host gets 401.
-  Whether this applies to API key requests on the real server is probed by
-  examples/00_probe_auth.py; `csrf_with_api_key` models either answer.
-- Wrong HTTP method gets 405. Version strings come back as text/plain.
+- API key auth: `Authorization: Bearer <key>`; a missing or wrong key gets 403 "Forbidden".
+- API key requests skip the CSRF check: a foreign Referer or Origin still gets 200.
+  Cookie-style requests (no key) with a foreign Referer/Origin get 401 (`csrf_with_api_key`
+  turns the check on for key requests too).
+- A container name in Host (`gluetun:8090`) was accepted. With `host_header_validation=True`
+  the fake instead refuses names that aren't IPs, localhost or in `server_domains` (401).
+- GET-only endpoints also accept POST. POST-only endpoints refuse GET with 405 (per
+  qBittorrent's source; to be confirmed on the real server in Stage 3).
+- Version strings come back as text/plain. torrents/info sends `private`, not the wiki's
+  `isPrivate`, plus 20 fields the wiki doesn't list; limits use 0 for unlimited.
 
 Filter semantics (downloading, seeding, active, ...) approximate qBittorrent's TorrentFilter.
 Field names and state strings must match what examples/01_discover.py records from the real
@@ -41,18 +44,27 @@ ERRORED = {"error", "missingFiles"}
 
 def make_torrent(name: str, state: str, *, n: int, size: int = 4_000_000_000, progress: float = 1.0,
                  category: str = "", tags: str = "", dlspeed: int = 0, upspeed: int = 0) -> dict[str, Any]:
+    """A torrents/info row with every field the real server sends and its observed defaults."""
     h = f"{n:02x}" * 20
     done = int(size * progress)
+    piece = 4_194_304
+    pieces = -(-size // piece)
     t: dict[str, Any] = {f: 0 for f in TORRENT_FIELDS}
     t.update(
-        name=name, hash=h, state=state, size=size, total_size=size, progress=progress,
-        completed=done, downloaded=done, amount_left=size - done, category=category, tags=tags,
-        dlspeed=dlspeed, upspeed=upspeed, save_path="/data/torrents/linux",
+        name=name, hash=h, infohash_v1=h, infohash_v2="", state=state, size=size, total_size=size,
+        progress=progress, completed=done, downloaded=done, downloaded_session=done,
+        amount_left=size - done, category=category, tags=tags, dlspeed=dlspeed, upspeed=upspeed,
+        save_path="/data/torrents/linux", download_path="", root_path="",
         content_path=f"/data/torrents/linux/{name}", magnet_uri=f"magnet:?xt=urn:btih:{h}",
-        tracker="", added_on=1_790_000_000 + n, dl_limit=-1, up_limit=-1, max_ratio=-1,
-        max_seeding_time=-1, ratio_limit=-2, seeding_time_limit=-2, eta=8_640_000,
-        availability=-1.0, ratio=0.0, auto_tmm=False, f_l_piece_prio=False, force_start=False,
-        isPrivate=False, seq_dl=False, super_seeding=False, priority=0 if progress >= 1 else n,
+        tracker="", trackers_count=1, comment="", created_by="", creation_date=-1,
+        added_on=1_790_000_000 + n, completion_on=1_790_000_500 + n if progress >= 1 else -1,
+        dl_limit=0, up_limit=0, max_ratio=0, max_seeding_time=-1, max_inactive_seeding_time=-1,
+        ratio_limit=-2, seeding_time_limit=-2, inactive_seeding_time_limit=-2,
+        share_limit_action="Default", eta=8_640_000, availability=-1, ratio=0.0, popularity=0.0,
+        connections_limit=100, piece_size=piece, pieces_num=pieces,
+        pieces_have=pieces if progress >= 1 else int(pieces * progress), has_metadata=True,
+        auto_tmm=False, f_l_piece_prio=False, force_start=False, private=False, seq_dl=False,
+        super_seeding=False, priority=0 if progress >= 1 else n,
     )
     return t
 
@@ -70,6 +82,13 @@ def default_torrents() -> list[dict[str, Any]]:
         make_torrent("big-buck-bunny-1080p.mkv", "stalledUP", n=5, size=900_000_000,
                      category="video"),
     ]
+
+
+def category(name: str, save_path: str) -> dict[str, Any]:
+    """A torrents/categories value in the shape the real server sends."""
+    return {"name": name, "savePath": save_path, "download_path": None, "ratio_limit": -2,
+            "seeding_time_limit": -2, "inactive_seeding_time_limit": -2,
+            "share_limit_action": "Default"}
 
 
 def _is_ip_or_localhost(host: str) -> bool:
@@ -105,11 +124,22 @@ class FakeQbt:
         self.version = "v5.2.3"
         self.webapi = "2.15.1"
         self.server_domains: set[str] = set()
-        self.csrf_with_api_key = True
+        self.host_header_validation = False  # observed: "gluetun:8090" accepted
+        self.csrf_with_api_key = False  # observed: key requests skip the Referer/Origin check
         self.torrents: list[dict[str, Any]] = default_torrents()
         self.categories: dict[str, dict[str, Any]] = {
-            "linux": {"name": "linux", "savePath": "/data/torrents/linux"},
-            "video": {"name": "video", "savePath": "/data/torrents/video"},
+            "linux": category("linux", "/data/torrents/linux"),
+            "video": category("video", ""),  # "" = the default save path (seen on the real server)
+        }
+        self.preferences: dict[str, Any] = {
+            "web_ui_port": PORT, "web_ui_host_header_validation_enabled": False,
+            "web_ui_domain_list": "*", "web_ui_csrf_protection_enabled": True,
+            "web_ui_clickjacking_protection_enabled": True, "bypass_local_auth": False,
+            "bypass_auth_subnet_whitelist_enabled": False, "web_ui_max_auth_fail_count": 5,
+            "web_ui_ban_duration": 3600, "web_ui_session_timeout": 3600, "use_https": False,
+            "web_ui_reverse_proxy_enabled": False,
+            # Secrets live here too; the library must never return them.
+            "web_ui_password": "fake-password-hash", "proxy_password": "fake-proxy-secret",
         }
         self.tags: list[str] = ["keep", "seed"]
         self.alt_speed = False
@@ -120,7 +150,8 @@ class FakeQbt:
             "app/buildInfo": ("GET", lambda p: _response(200, {
                 "qt": "6.9.2", "libtorrent": "2.0.11.0", "boost": "1.89.0", "openssl": "3.5.4",
                 "zlib": "1.3.1", "bitness": 64, "platform": "linux"})),
-            "app/defaultSavePath": ("GET", lambda p: _response(200, "/data/torrents")),
+            "app/defaultSavePath": ("GET", lambda p: _response(200, "/data/torrents/completed")),
+            "app/preferences": ("GET", lambda p: _response(200, self.preferences)),
             "transfer/info": ("GET", self._transfer_info),
             "transfer/speedLimitsMode": ("GET", lambda p: _response(200, "1" if self.alt_speed else "0")),
             "torrents/info": ("GET", self._torrents_info),
@@ -143,7 +174,8 @@ class FakeQbt:
         parts = urlsplit(url)
         host_header = headers.get("Host") or parts.netloc
         hostname = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else host_header
-        if not _is_ip_or_localhost(hostname) and hostname not in self.server_domains:
+        if (self.host_header_validation and not _is_ip_or_localhost(hostname)
+                and hostname not in self.server_domains):
             return _response(401, "Unauthorized")
         auth = headers.get("Authorization", "")
         has_key = auth == f"Bearer {self.api_key}"
@@ -158,7 +190,7 @@ class FakeQbt:
         if route is None:
             return _response(404, "Not Found")
         allowed, handler = route
-        if method != allowed:
+        if allowed == "POST" and method != "POST":  # GET-only endpoints also accept POST
             return _response(405, "Method Not Allowed")
         self.requests.append((method, endpoint, dict(params)))
         return handler(params)
@@ -167,6 +199,7 @@ class FakeQbt:
     def _transfer_info(self, p: dict[str, Any]) -> requests.Response:
         return _response(200, {
             "connection_status": "connected", "dht_nodes": 312,
+            "last_external_address_v4": "203.0.113.7", "last_external_address_v6": "",
             "dl_info_data": 51_000_000_000, "dl_info_speed": sum(t["dlspeed"] for t in self.torrents),
             "dl_rate_limit": 0, "up_info_data": 9_000_000_000,
             "up_info_speed": sum(t["upspeed"] for t in self.torrents), "up_rate_limit": 0,
