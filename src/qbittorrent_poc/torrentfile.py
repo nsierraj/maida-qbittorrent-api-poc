@@ -1,0 +1,114 @@
+"""Read just enough of a .torrent file to know which torrent it is before adding it.
+
+qBittorrent identifies a torrent by its info hash: SHA-1 of the bencoded `info` dictionary for
+v1 and hybrid torrents, and the first 40 hex digits of its SHA-256 for v2-only torrents. Knowing
+it up front lets the sandbox refuse a torrent that already exists outside it, and find the new
+one after torrents/add (which answers before the torrent appears).
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from typing import Any
+
+MAX_TORRENT_BYTES = 10 * 1024 * 1024
+
+
+class TorrentFileError(ValueError):
+    """The bytes aren't a usable .torrent file."""
+
+
+def _decode(data: bytes, i: int, spans: dict[str, tuple[int, int]], depth: int = 0) -> tuple[Any, int]:
+    if depth > 64:
+        raise TorrentFileError("Nested too deeply.")
+    if i >= len(data):
+        raise TorrentFileError("Truncated data.")
+    c = data[i:i + 1]
+    if c == b"i":
+        end = data.index(b"e", i)
+        return int(data[i + 1:end]), end + 1
+    if c == b"l":
+        i += 1
+        items = []
+        while data[i:i + 1] != b"e":
+            value, i = _decode(data, i, spans, depth + 1)
+            items.append(value)
+        return items, i + 1
+    if c == b"d":
+        i += 1
+        out: dict[bytes, Any] = {}
+        while data[i:i + 1] != b"e":
+            key, i = _decode(data, i, spans, depth + 1)
+            if not isinstance(key, bytes):
+                raise TorrentFileError("Dictionary keys must be strings.")
+            start = i
+            value, i = _decode(data, i, spans, depth + 1)
+            if key == b"info" and depth == 0:
+                spans["info"] = (start, i)
+            out[key] = value
+        return out, i + 1
+    if c.isdigit():
+        colon = data.index(b":", i)
+        length = int(data[i:colon])
+        start = colon + 1
+        if start + length > len(data):
+            raise TorrentFileError("Truncated string.")
+        return data[start:start + length], start + length
+    raise TorrentFileError(f"Unexpected byte {c!r} at {i}.")
+
+
+def encode(value: Any) -> bytes:
+    """Bencode a value (ints, bytes/str, lists, dicts with sorted keys). Used to build test data."""
+    if isinstance(value, bool):
+        raise TypeError("bencode has no booleans")
+    if isinstance(value, int):
+        return b"i%de" % value
+    if isinstance(value, str):
+        value = value.encode()
+    if isinstance(value, bytes):
+        return b"%d:%s" % (len(value), value)
+    if isinstance(value, list):
+        return b"l" + b"".join(encode(v) for v in value) + b"e"
+    if isinstance(value, dict):
+        items = sorted((k.encode() if isinstance(k, str) else k, v) for k, v in value.items())
+        return b"d" + b"".join(encode(k) + encode(v) for k, v in items) + b"e"
+    raise TypeError(f"can't bencode {type(value).__name__}")
+
+
+@dataclass(frozen=True)
+class TorrentFile:
+    info_hash: str  # what qBittorrent calls `hash`
+    name: str
+    size: int | None  # total payload bytes; None for v2-only file trees
+    webseeds: tuple[str, ...]
+
+
+def parse(data: bytes) -> TorrentFile:
+    if len(data) > MAX_TORRENT_BYTES:
+        raise TorrentFileError("Larger than any sensible .torrent file.")
+    spans: dict[str, tuple[int, int]] = {}
+    try:
+        meta, end = _decode(data, 0, spans)
+    except (ValueError, IndexError) as e:
+        raise TorrentFileError(f"Not a .torrent file: {e}") from e
+    if not isinstance(meta, dict) or "info" not in spans or not isinstance(meta.get(b"info"), dict):
+        raise TorrentFileError("Not a .torrent file: no info dictionary.")
+    info = meta[b"info"]
+    raw_info = data[spans["info"][0]:spans["info"][1]]
+    v2_only = info.get(b"meta version") == 2 and b"pieces" not in info
+    info_hash = hashlib.sha256(raw_info).hexdigest()[:40] if v2_only else hashlib.sha1(raw_info).hexdigest()
+    if b"length" in info:
+        size: int | None = info[b"length"]
+    elif isinstance(info.get(b"files"), list):
+        size = sum(f.get(b"length", 0) for f in info[b"files"])
+    else:
+        size = None
+    seeds = meta.get(b"url-list", [])
+    seeds = [seeds] if isinstance(seeds, bytes) else seeds
+    return TorrentFile(
+        info_hash=info_hash,
+        name=info.get(b"name", b"").decode("utf-8", "replace"),
+        size=size,
+        webseeds=tuple(s.decode("utf-8", "replace") for s in seeds if isinstance(s, bytes)),
+    )

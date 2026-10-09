@@ -24,7 +24,7 @@ Synology NAS. Sibling of [maida-synology-api-poc](https://github.com/nsierraj/ma
 ## Setup
 
 1. **API key:** qBittorrent WebUI → Tools → Options → Web UI → *API Key* → Generate. Copy the `qbt_…` value.
-2. **Sandbox:** write examples only touch torrents tagged `poc` (`QBT_SANDBOX_TAG`), and only save or move data inside `QBT_SANDBOX_SAVEPATH` (a container path, default `/data/torrents/poc`). Anything else is refused locally before a request is sent. `03_lifecycle.py` adds a legal test torrent (`QBT_TEST_MAGNET`, default the Lubuntu 26.04 ISO) and downloads for a few seconds through your VPN.
+2. **Sandbox:** write examples only touch torrents tagged `poc` (`QBT_SANDBOX_TAG`), and only save or move data inside `QBT_SANDBOX_SAVEPATH` (a container path, default `/data/torrents/poc`). Anything else is refused locally before a request is sent. `03_lifecycle.py` adds a legal test torrent (`QBT_TEST_TORRENT`, a `.torrent` URL or a magnet link; default the Arch Linux 2026.10.01 ISO, about 1.5 GiB) and downloads for a few seconds through your VPN.
 3. Configure:
 
 ```bash
@@ -69,6 +69,7 @@ CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11–3.13 for every p
 - `src/qbittorrent_poc/config.py`: loads `.env` and connects with readable failures.
 - `src/qbittorrent_poc/policy.py`: `TorrentPolicy`, the sandbox rules (tag, save path, write and delete opt-ins).
 - `src/qbittorrent_poc/sandbox.py`: `Sandbox`, policy-checked changes plus waiting and cleanup. Examples and the MCP server change things only through it.
+- `src/qbittorrent_poc/torrentfile.py`: reads a `.torrent` file's info hash, name and size.
 - `src/qbittorrent_poc/fields.py`: reference field sets per endpoint and `diff_fields()`, which the examples use to report what the real server adds or drops.
 - `src/qbittorrent_poc/samples.py`: redaction for everything examples save or print.
 - `src/qbittorrent_poc/fmt.py`: sizes, speeds, durations and timestamps for humans.

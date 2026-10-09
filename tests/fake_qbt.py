@@ -18,7 +18,9 @@ It models the behavior observed on the real server (qBittorrent 5.2.3, WebAPI 2.
 - Stage 3 writes are POST-only (GET gets 405). torrents/add reads `stopped` (5.x) or `paused`
   (4.x), answers "Ok." or "Fails." (hash already present), and the torrent appears in
   torrents/info at once; a magnet without metadata sits in metaDL/stoppedDL with size 0 until
-  `fetch_metadata()` is called. delete answers 200 even for unknown hashes. Unverified until
+  `fetch_metadata()` is called. URLs of .torrent files are fetched from `web` (the fake
+  "internet", which also serves the examples' own downloads); an unknown URL still answers
+  "Ok." and nothing appears, as a failed background download would. delete answers 200 even for unknown hashes. Unverified until
   examples/03_lifecycle.py runs on the real server.
 - Version strings come back as text/plain. torrents/info sends `private`, not the wiki's
   `isPrivate`, plus 20 fields the wiki doesn't list; limits use 0 for unlimited.
@@ -38,9 +40,23 @@ from urllib.parse import urlsplit
 
 import requests
 
+from qbittorrent_poc import torrentfile
 from qbittorrent_poc.fields import TORRENT_FIELDS
 
 API_KEY = "qbt_fakekeyfakekeyfakekey"
+
+# A stand-in for the Arch ISO .torrent the lifecycle example adds by default, served by the fake
+# "internet" in FakeQbt.web (same name, size and piece length as the real one; fake piece hashes).
+ARCH_URL = "https://fastly.mirror.pkgbuild.com/iso/2026.10.01/archlinux-2026.10.01-x86_64.iso.torrent"
+ARCH_SIZE = 1_640_497_152
+ARCH_TORRENT = torrentfile.encode({
+    "comment": "Arch Linux 2026.10.01 <https://archlinux.org>",
+    "created by": "mktorrent 1.1",
+    "info": {"length": ARCH_SIZE, "name": "archlinux-2026.10.01-x86_64.iso",
+             "piece length": 524_288, "pieces": b"\x01" * 20 * (-(-ARCH_SIZE // 524_288))},
+    "url-list": ["https://mirror.example.org/archlinux/iso/2026.10.01/"],
+})
+ARCH_HASH = torrentfile.parse(ARCH_TORRENT).info_hash
 HOST = "192.0.2.10"  # TEST-NET-1, never a real NAS
 PORT = 8090
 
@@ -163,7 +179,8 @@ class FakeQbt:
         ]
         self.rechecked: list[str] = []
         self.recheck_resumes = False
-        self.deleted_files: list[str] = []  # hashes deleted with deleteFiles=true
+        self.deleted_files: list[str] = []
+        self.web: dict[str, bytes] = {ARCH_URL: ARCH_TORRENT}  # non-API URLs (the "internet")  # hashes deleted with deleteFiles=true
         self._rid = 0
         self._sync_snapshots: dict[int, dict[str, Any]] = {}
         self._peer_snapshots: dict[tuple[str, int], dict[str, Any]] = {}
@@ -217,6 +234,14 @@ class FakeQbt:
 
     def handle(self, method: str, url: str, headers: dict[str, str], params: dict[str, Any]) -> requests.Response:
         parts = urlsplit(url)
+        if not parts.path.startswith("/api/v2/"):  # a plain download, e.g. a .torrent file
+            body = self.web.get(url)
+            if body is None:
+                return _response(404, "Not Found")
+            r = _response(200, "")
+            r._content = body
+            r.headers["Content-Type"] = "application/x-bittorrent"
+            return r
         host_header = headers.get("Host") or parts.netloc
         hostname = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else host_header
         if (self.host_header_validation and not _is_ip_or_localhost(hostname)
@@ -478,10 +503,19 @@ class FakeQbt:
         tmm = _truthy(p["autoTMM"]) if "autoTMM" in p else self.preferences.get("auto_tmm_enabled", False)
         added = 0
         for url in urls:
-            h = magnet_hash(url)
+            size, has_meta = 0, False
+            if url.startswith("magnet:"):
+                h = magnet_hash(url)
+                name = next((part[3:] for part in url.split("&") if part.startswith("dn=")), h)
+            else:  # qBittorrent fetches the .torrent itself, after answering
+                data = self.web.get(url)
+                if data is None:
+                    added += 1  # "Ok." now; the download fails later and nothing appears
+                    continue
+                meta = torrentfile.parse(data)
+                h, name, size, has_meta = meta.info_hash, meta.name, meta.size or 0, True
             if self.torrent(h):
                 continue
-            name = next((part[3:] for part in url.split("&") if part.startswith("dn=")), h)
             cat = p.get("category", "")
             if cat and cat not in self.categories:
                 self.categories[cat] = category(cat, "")
@@ -490,7 +524,9 @@ class FakeQbt:
                     self.tags.append(tag)
             t = make_torrent(name, "stoppedDL" if stopped else "metaDL", n=0, size=0, progress=0.0,
                              category=cat, tags=", ".join(sorted(x for x in p.get("tags", "").split(",") if x)))
-            t.update(hash=h, infohash_v1=h, magnet_uri=url, has_metadata=False, pieces_num=0, pieces_have=0,
+            t.update(hash=h, infohash_v1=h, magnet_uri=url if url.startswith("magnet:") else f"magnet:?xt=urn:btih:{h}",
+                     has_metadata=has_meta, size=size, total_size=size, amount_left=size,
+                     pieces_num=-(-size // t["piece_size"]) if size else 0, pieces_have=0,
                      save_path=("/data/torrents/completed" if tmm else p.get("savepath"))
                      or "/data/torrents/completed", content_path="", auto_tmm=tmm,
                      added_on=1_790_100_000 + len(self.torrents), completion_on=-1, priority=len(self.torrents))
