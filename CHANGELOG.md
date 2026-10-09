@@ -6,6 +6,10 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 ## [Unreleased]
 
 ### Added
+- Stage 3, changes inside a sandbox: raw `WebUI` writes (`add`, `stop`, `start`, `recheck`, `reannounce`, categories, tags, `rename`, `set_location`, `delete`) and `magnet_hash()`.
+- `TorrentPolicy` and `Sandbox`: every change is refused locally unless the torrents carry the sandbox tag and paths stay inside the sandbox save path; writes and deletes are separate opt-ins; `add` always applies the tag; `wait_for()` and `cleanup()`.
+- `examples/03_lifecycle.py`: add a legal test torrent stopped (default the Lubuntu 26.04 ISO, `QBT_TEST_MAGNET`), start briefly, stop, recheck, categorize, tag, rename, move, show a refused change outside the sandbox, delete with files. `--keep` and `--cleanup`.
+- The fake serves the Stage 3 endpoints. UC-10 to UC-15 in `docs/use-cases.md`.
 - Stage 2, per-torrent detail (read-only): `WebUI.find_torrents()`/`resolve_hash()` (name substring or hash prefix), `properties()`, `files()`, `trackers()`, `webseeds()`, `peers()` (`sync/torrentPeers`), `maindata()` (`sync/maindata`, full and incremental) and `main_log()`.
 - `qbittorrent_poc.fields`: reference field sets per endpoint, status and priority names, and `diff_fields()`.
 - `qbittorrent_poc.samples`: one place for redaction of everything examples print or save (tracker passkeys, peer and external IPs, log messages, names, hashes, paths).
@@ -22,6 +26,7 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 - `docs/qbittorrent/reference-compose.yml`: redacted copy of the qBittorrent + gluetun compose project on the NAS, for networking context.
 
 ### Changed
+- `examples/02_inspect.py` and the README no longer call the console output "safe to paste": tracker passkeys and IPs are hidden, but torrent names, file names and log messages are shown.
 - Verified Stage 1 against the real server (qBittorrent 5.2.3, WebAPI 2.15.1). Findings are in `docs/qbittorrent/webui-api.md` §8 (errata E1–E10): API keys skip the Referer/Origin check, a container name in `Host` is accepted, GET endpoints accept POST, and `torrents/info` sends 66 fields including `private` instead of `isPrivate`.
 - `TORRENT_FIELDS` is now the real 5.2.3 field list; `tests/fake_qbt.py` follows the observed behavior, field set, defaults and category shape.
 - `examples/00_probe_auth.py` describes the observed results more precisely.

@@ -6,9 +6,10 @@
 
 Read-only. Properties -> files -> trackers -> peers -> sync/maindata (full, then a delta after
 --wait seconds) -> log -> fields that differ from the reference sets in qbittorrent_poc.fields.
-The output is safe to paste: tracker URLs show only scheme://host (private trackers embed
-passkeys), peers are summarized without IPs, and IP addresses in log lines are masked.
-Sanitized samples go to out/samples/.
+Console output hides secrets but not content: tracker URLs show only scheme://host (private
+trackers embed passkeys), peers are summarized without IPs, and IPs in log lines are masked,
+but the torrent name, file names and log messages are shown so you can tell what you're
+looking at. Trim them before pasting if you prefer. The samples in out/samples/ drop them too.
 """
 
 from __future__ import annotations

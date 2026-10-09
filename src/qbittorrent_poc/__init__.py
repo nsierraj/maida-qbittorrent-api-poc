@@ -4,6 +4,8 @@ from . import fields, fmt, samples
 from .client import QbtClient
 from .config import Settings, connect
 from .errors import QbtError
+from .policy import PolicyError, TorrentPolicy
+from .sandbox import Sandbox
 from .webui import FILTERS, TORRENT_FIELDS, TORRENT_STATES, WEBUI_SECURITY_PREFS, WebUI
 
 __all__ = [
@@ -12,8 +14,11 @@ __all__ = [
     "TORRENT_STATES",
     "WEBUI_SECURITY_PREFS",
     "QbtClient",
+    "PolicyError",
     "QbtError",
+    "Sandbox",
     "Settings",
+    "TorrentPolicy",
     "WebUI",
     "connect",
     "fields",

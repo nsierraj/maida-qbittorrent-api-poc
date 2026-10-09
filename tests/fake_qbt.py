@@ -15,6 +15,11 @@ It models the behavior observed on the real server (qBittorrent 5.2.3, WebAPI 2.
   qBittorrent's source and are unverified until examples/02_inspect.py runs on the real server.
   Unknown hashes get 404. sync/maindata and sync/torrentPeers return deltas when given the rid
   of an earlier response, and everything when the rid is 0 or unknown.
+- Stage 3 writes are POST-only (GET gets 405). torrents/add reads `stopped` (5.x) or `paused`
+  (4.x), answers "Ok." or "Fails." (hash already present), and the torrent appears in
+  torrents/info at once; a magnet without metadata sits in metaDL/stoppedDL with size 0 until
+  `fetch_metadata()` is called. delete answers 200 even for unknown hashes. Unverified until
+  examples/03_lifecycle.py runs on the real server.
 - Version strings come back as text/plain. torrents/info sends `private`, not the wiki's
   `isPrivate`, plus 20 fields the wiki doesn't list; limits use 0 for unlimited.
 
@@ -156,6 +161,8 @@ class FakeQbt:
             {"id": 3, "type": 4, "timestamp": 1_790_000_100, "message": "Tracker error: timed out. Torrent: debian"},
             {"id": 4, "type": 8, "timestamp": 1_790_000_200, "message": "File error alert. Reason: disk full"},
         ]
+        self.rechecked: list[str] = []
+        self.deleted_files: list[str] = []  # hashes deleted with deleteFiles=true
         self._rid = 0
         self._sync_snapshots: dict[int, dict[str, Any]] = {}
         self._peer_snapshots: dict[tuple[str, int], dict[str, Any]] = {}
@@ -180,6 +187,20 @@ class FakeQbt:
             "sync/torrentPeers": ("GET", self._with_torrent(self._torrent_peers)),
             "sync/maindata": ("GET", self._maindata),
             "log/main": ("GET", self._main_log),
+            "torrents/add": ("POST", self._add),
+            "torrents/stop": ("POST", self._for_hashes(self._stop)),
+            "torrents/start": ("POST", self._for_hashes(self._start)),
+            "torrents/recheck": ("POST", self._for_hashes(self._recheck)),
+            "torrents/reannounce": ("POST", self._for_hashes(lambda t, p: None)),
+            "torrents/setCategory": ("POST", self._set_category),
+            "torrents/createCategory": ("POST", self._create_category),
+            "torrents/removeCategories": ("POST", self._remove_categories),
+            "torrents/addTags": ("POST", self._for_hashes(self._add_tags)),
+            "torrents/removeTags": ("POST", self._for_hashes(self._remove_tags)),
+            "torrents/deleteTags": ("POST", self._delete_tags),
+            "torrents/rename": ("POST", self._rename),
+            "torrents/setLocation": ("POST", self._set_location),
+            "torrents/delete": ("POST", self._delete),
             "auth/login": ("POST", lambda p: _response(200, "Fails.")),
         }
 
@@ -427,6 +448,144 @@ class FakeQbt:
     def add_log(self, message: str, type_: int = 2) -> None:
         self.log.append({"id": len(self.log), "type": type_, "timestamp": 1_790_001_000 + len(self.log),
                          "message": message})
+
+
+    # -- Stage 3: changes ------------------------------------------------------------------------
+    def _for_hashes(self, handler: Any) -> Any:
+        """Apply handler(torrent, params) to every torrent named in `hashes` ('all' = every one).
+        Unknown hashes are ignored, as the server does."""
+        def wrapped(p: dict[str, Any]) -> requests.Response:
+            wanted = p.get("hashes", "")
+            if not wanted:
+                return _response(400, "")
+            targets = self.torrents if wanted == "all" else [
+                t for t in self.torrents if t["hash"] in wanted.lower().split("|")]
+            for t in targets:
+                handler(t, p)
+            return _response(200, "")
+        return wrapped
+
+    def _add(self, p: dict[str, Any]) -> requests.Response:
+        from qbittorrent_poc.webui import magnet_hash
+
+        urls = [u for u in p.get("urls", "").split("\n") if u.strip()]
+        if not urls:
+            return _response(400, "")
+        stopped = _truthy(p.get("stopped")) or _truthy(p.get("paused"))
+        added = 0
+        for url in urls:
+            h = magnet_hash(url)
+            if self.torrent(h):
+                continue
+            name = next((part[3:] for part in url.split("&") if part.startswith("dn=")), h)
+            cat = p.get("category", "")
+            if cat and cat not in self.categories:
+                self.categories[cat] = category(cat, "")
+            for tag in [x for x in p.get("tags", "").split(",") if x]:
+                if tag not in self.tags:
+                    self.tags.append(tag)
+            t = make_torrent(name, "stoppedDL" if stopped else "metaDL", n=0, size=0, progress=0.0,
+                             category=cat, tags=", ".join(sorted(x for x in p.get("tags", "").split(",") if x)))
+            t.update(hash=h, infohash_v1=h, magnet_uri=url, has_metadata=False, pieces_num=0, pieces_have=0,
+                     save_path=p.get("savepath") or "/data/torrents/completed", content_path="",
+                     added_on=1_790_100_000 + len(self.torrents), completion_on=-1, priority=len(self.torrents))
+            t["name"] = p.get("rename") or name
+            self.torrents.append(t)
+            added += 1
+        return _response(200, "Ok." if added else "Fails.")
+
+    def fetch_metadata(self, torrent_hash: str, size: int = 3_200_000_000) -> None:
+        """Simulate the swarm delivering the metadata of an added magnet."""
+        t = self.torrent(torrent_hash)
+        t.update(has_metadata=True, size=size, total_size=size, amount_left=size,
+                 pieces_num=-(-size // t["piece_size"]))
+        if t["state"] == "metaDL":
+            t["state"] = "downloading"
+
+    @staticmethod
+    def _stop(t: dict[str, Any], p: dict[str, Any]) -> None:
+        t["state"] = "stoppedUP" if t["progress"] >= 1 else "stoppedDL"
+        t["dlspeed"] = t["upspeed"] = 0
+
+    @staticmethod
+    def _start(t: dict[str, Any], p: dict[str, Any]) -> None:
+        if t["state"] in ("stoppedDL", "stoppedUP"):
+            if t["progress"] >= 1:
+                t["state"] = "stalledUP"
+            else:
+                t["state"] = "downloading" if t["has_metadata"] else "metaDL"
+
+    def _recheck(self, t: dict[str, Any], p: dict[str, Any]) -> None:
+        self.rechecked.append(t["hash"])
+
+    def _set_category(self, p: dict[str, Any]) -> requests.Response:
+        cat = p.get("category", "")
+        if cat and cat not in self.categories:
+            return _response(409, "Incorrect category name")
+        return self._for_hashes(lambda t, q: t.__setitem__("category", cat))(p)
+
+    def _create_category(self, p: dict[str, Any]) -> requests.Response:
+        name = p.get("category", "")
+        if not name:
+            return _response(400, "")
+        if name in self.categories:
+            return _response(409, "Unable to create category")
+        self.categories[name] = category(name, p.get("savePath", ""))
+        return _response(200, "")
+
+    def _remove_categories(self, p: dict[str, Any]) -> requests.Response:
+        for name in p.get("categories", "").split("\n"):
+            self.categories.pop(name, None)
+            for t in self.torrents:
+                if t["category"] == name:
+                    t["category"] = ""
+        return _response(200, "")
+
+    def _add_tags(self, t: dict[str, Any], p: dict[str, Any]) -> None:
+        have = [x.strip() for x in t["tags"].split(",") if x.strip()]
+        for tag in [x.strip() for x in p.get("tags", "").split(",") if x.strip()]:
+            if tag not in self.tags:
+                self.tags.append(tag)
+            if tag not in have:
+                have.append(tag)
+        t["tags"] = ", ".join(sorted(have))
+
+    @staticmethod
+    def _remove_tags(t: dict[str, Any], p: dict[str, Any]) -> None:
+        drop = {x.strip() for x in p.get("tags", "").split(",") if x.strip()}
+        t["tags"] = ", ".join(x.strip() for x in t["tags"].split(",") if x.strip() and x.strip() not in drop)
+
+    def _delete_tags(self, p: dict[str, Any]) -> requests.Response:
+        drop = {x.strip() for x in p.get("tags", "").split(",") if x.strip()}
+        self.tags = [t for t in self.tags if t not in drop]
+        for t in self.torrents:
+            self._remove_tags(t, {"tags": ",".join(drop)})
+        return _response(200, "")
+
+    def _rename(self, p: dict[str, Any]) -> requests.Response:
+        t = self.torrent(p.get("hash", "").lower())
+        if t is None:
+            return _response(404, "")
+        if not p.get("name", "").strip():
+            return _response(409, "Incorrect torrent name")
+        t["name"] = p["name"]
+        return _response(200, "")
+
+    def _set_location(self, p: dict[str, Any]) -> requests.Response:
+        location = p.get("location", "")
+        if not location:
+            return _response(400, "Save path cannot be empty")
+        return self._for_hashes(lambda t, q: t.update(save_path=location))(p)
+
+    def _delete(self, p: dict[str, Any]) -> requests.Response:
+        wanted = p.get("hashes", "")
+        if not wanted:
+            return _response(400, "")
+        doomed = {t["hash"] for t in self.torrents} if wanted == "all" else set(wanted.lower().split("|"))
+        self.deleted_files.extend(t["hash"] for t in self.torrents
+                                  if t["hash"] in doomed and _truthy(p.get("deleteFiles")))
+        self.torrents = [t for t in self.torrents if t["hash"] not in doomed]
+        return _response(200, "")
 
 
 def _changed(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:

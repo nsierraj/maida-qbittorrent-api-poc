@@ -18,6 +18,12 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 | UC-07 | Peers of a torrent | `peers()` | 02 | – | read | pending |
 | UC-08 | Incremental sync ("what changed?") | `maindata()` | 02 | – | read | pending |
 | UC-09 | Application log | `main_log()` | 02 | – | read | pending |
+| UC-10 | Add a torrent (magnet/URL) | `Sandbox.add()` → `add()` | 03 | – | write | pending |
+| UC-11 | Stop, start, recheck, reannounce | `Sandbox.stop/start/recheck/reannounce()` | 03 | – | write | pending |
+| UC-12 | Categories | `Sandbox.ensure_category/set_category()` | 03 | – | write | pending |
+| UC-13 | Tags | `Sandbox.add_tags/remove_tags()` | 03 | – | write | pending |
+| UC-14 | Rename and move | `Sandbox.rename/set_location()` | 03 | – | write | pending |
+| UC-15 | Delete (optionally with data) | `Sandbox.delete/cleanup()` | 03 | – | destructive | pending |
 
 ---
 
@@ -29,7 +35,9 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 4. **Parameters.** GET query or POST form; booleans are lowercase `true`/`false` (`client.encode`); `hashes` are `|`-joined; tags are comma-separated, and `torrents/info` returns them as one string (`"a, b"`), split with `split_tags()`.
 5. **Paths are container paths** (`/data/torrents/...`), never NAS paths.
 6. **Never expose secrets in output.** `qbittorrent_poc.samples` redacts what examples save and print: tracker URLs show only `scheme://host` (private trackers put passkeys in the path), peers are summarized without IPs, IPs in log lines are masked, and the external address, names, hashes and paths are dropped from samples. MCP tools follow the same rules.
-7. **5.x names.** `stopped` filter, `stoppedDL`/`stoppedUP` states, `torrents/stop`/`start`. `list_torrents("paused")` is refused locally.
+7. **Changes only through the sandbox.** `Sandbox` checks `TorrentPolicy` before sending anything: the torrents must exist and carry the sandbox tag (`all` is refused, a mixed batch is refused whole), the sandbox tag can't be removed, save paths and moves stay inside the sandbox path, and writes and deletes are separate opt-ins. A `PolicyError` means no request was sent.
+8. **Changes are asynchronous.** The server answers before the change is visible: an added magnet appears a moment later, a stop or move takes time. `Sandbox.wait_for()` polls `torrents/info` until a condition holds.
+9. **5.x names.** `stopped` filter, `stoppedDL`/`stoppedUP` states, `torrents/stop`/`start`. `list_torrents("paused")` is refused locally.
 
 ---
 
@@ -91,3 +99,37 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 - **Call:** `GET log/main?normal=&info=&warning=&critical=&last_known_id=`. Entries `{id, message, timestamp, type}`, oldest first; type 1 normal, 2 info, 4 warning, 8 critical (`fields.LOG_TYPES`).
 - **Paging:** `last_known_id` returns only newer entries, so a poller keeps the last id it saw.
 - **Privacy:** messages can contain IPs (e.g. "Detected external IP") and paths. Mask IPs before showing them; samples drop messages entirely.
+
+## UC-10: Add a torrent
+
+- **Call:** `POST torrents/add` (multipart): `urls` (newline-separated magnet/http links), `savepath`, `category`, `tags` (comma-separated), `stopped`, `rename`, `sequentialDownload`, `skip_checking`.
+- **Stopped on add:** 5.x renamed `paused` to `stopped`; the library sends both. `03_lifecycle.py` reports whether the new torrent arrived stopped, and stops it at once if not.
+- **Answer:** `Ok.` per the wiki, `Fails.` when nothing was added (for example, the hash is already present), which `add()` turns into `QbtError` 409. A JSON summary is also accepted, in case 5.2 answers that way.
+- **Magnets:** the info hash comes from the link (`magnet_hash()`, hex or base32), so the caller knows it before the torrent appears. Until metadata arrives the torrent has `has_metadata: false`, size 0 and state `metaDL` (running) or `stoppedDL`.
+- **Sandbox:** `Sandbox.add()` always adds the sandbox tag and requires the save path to be inside the sandbox path.
+
+## UC-11: Stop, start, recheck, reannounce
+
+- **Calls:** `POST torrents/stop|start|recheck|reannounce` with `hashes`. 200 even for unknown hashes, so the sandbox checks existence first.
+- **Method:** POST-only per the wiki; `03_lifecycle.py` sends one GET to `torrents/stop` (on the sandbox torrent) to record whether 405 is enforced.
+
+## UC-12: Categories
+
+- **Calls:** `POST torrents/createCategory` (`category`, `savePath`; 409 if it exists or is invalid), `POST torrents/setCategory` (`hashes`, `category`; 409 for an unknown category, `""` removes it), `POST torrents/removeCategories` (newline-separated names; their torrents become uncategorized).
+- **Sandbox:** `ensure_category()` creates the category only if missing, with a save path inside the sandbox; cleanup removes it only when no torrent uses it.
+
+## UC-13: Tags
+
+- **Calls:** `POST torrents/addTags` (creates missing tags), `POST torrents/removeTags` (an empty list would remove every tag, so `remove_tags()` refuses it), `POST torrents/deleteTags` (removes tags from qBittorrent and every torrent).
+- **Sandbox:** the sandbox tag can't be removed; otherwise a torrent could leave the sandbox. Tags come back sorted, as one comma-separated string.
+
+## UC-14: Rename and move
+
+- **Calls:** `POST torrents/rename` (`hash`, `name`; display name only, files keep their names; 404 unknown hash, 409 empty name), `POST torrents/setLocation` (`hashes`, `location`; 400 empty, 403 no write access, 409 can't create the folder).
+- **Moves are asynchronous** (state `moving`); wait until `save_path` changes.
+- **Sandbox:** the target must be inside the sandbox path.
+
+## UC-15: Delete
+
+- **Call:** `POST torrents/delete` (`hashes`, `deleteFiles`). 200 even for unknown hashes. `delete()` has no default for `delete_files`, so every caller decides.
+- **Sandbox:** needs the separate delete opt-in. `cleanup()` deletes every sandbox torrent, waits until they're gone, then removes helper tags and unused sandbox categories.

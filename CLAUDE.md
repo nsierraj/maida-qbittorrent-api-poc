@@ -10,7 +10,7 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 
 ## Code
 
-- `src/qbittorrent_poc/`: the library. `client.py` (HTTP + API key), `webui.py` (`WebUI`, one method per use case; all wire-format knowledge), `fields.py` (reference field sets per endpoint; "real 5.2.3" sets are authoritative, "wiki"/"source" sets are unverified), `samples.py` (redaction), `config.py`, `errors.py`, `fmt.py`.
+- `src/qbittorrent_poc/`: the library. `client.py` (HTTP + API key), `webui.py` (`WebUI`, one method per use case; all wire-format knowledge), `fields.py` (reference field sets per endpoint; "real 5.2.3" sets are authoritative, "wiki"/"source" sets are unverified), `samples.py` (redaction), `policy.py` (`TorrentPolicy`), `sandbox.py` (`Sandbox`: the only way examples and the MCP server change anything), `config.py`, `errors.py`, `fmt.py`.
 - `src/qbittorrent_mcp/`: the MCP server (added in a later stage).
 - `examples/`: numbered scripts run by hand against the real NAS.
 - `tests/`: `fake_qbt.py` is an in-memory qBittorrent; when you learn a new quirk on the real server, add it to the fake and add a test.
@@ -21,7 +21,7 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 - **All changes go through a pull request**, never a direct push to `main`. CI (`.github/workflows/ci.yml`) must be green. Workflows must not use secrets, `.env` or a real NAS.
 - **The wiki lags the server.** The official wiki page is for 5.0 and still says `paused` in places; qBittorrent 5.x uses `torrents/stop`, `torrents/start`, the `stopped` filter and `stoppedDL`/`stoppedUP` states. When the wiki and the real server disagree, trust `docs/qbittorrent/webui-api.md` §Errata, and record what the server did. If an operation fails, capture the WebUI's own request (browser DevTools) rather than guessing.
 - **API key auth only** (`Authorization: Bearer qbt_…`, qBittorrent ≥ 5.2). No cookie login, no password in `.env`. Keys cannot call `auth/login`/`auth/logout`; `app/webapiVersion` is the auth probe.
-- **Sandbox by tag.** The NAS has real torrents. Anything that changes state must go through `TorrentPolicy` and only act on torrents carrying `QBT_SANDBOX_TAG` (default `poc`). `add` always applies that tag. Examples and tests never touch untagged torrents.
+- **Sandbox by tag.** The NAS has real torrents. Anything that changes state goes through `Sandbox`, which applies `TorrentPolicy` before sending anything: only torrents tagged `QBT_SANDBOX_TAG` (default `poc`), never `all`, the sandbox tag can't be removed, paths stay inside `QBT_SANDBOX_SAVEPATH`, and writes and deletes are separate opt-ins. `add` always applies the tag. Raw `WebUI` write methods exist for tests; don't call them from examples or the MCP server. Tests assert that refused calls send no request.
 - **Paths in API calls are container paths** (`/data/torrents/...`), not NAS paths (`/volume1/data/torrents/...`), because qBittorrent runs in a container.
 - **The fake can't prove the wire format.** A new API call needs a real-NAS run (an example script) before it becomes an MCP tool.
 - **Order for new operations:** library method + fake + test → real-NAS example → MCP tool → docs (`use-cases.md`, `mcp-server.md`).

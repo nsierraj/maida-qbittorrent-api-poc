@@ -170,6 +170,10 @@ Response: array of torrent objects. The 66 fields 5.2.3 actually sends are in `w
 | `torrents/toggleSequentialDownload`, `toggleFirstLastPiecePrio` | `hashes` | 200 |
 | `torrents/renameFile`, `renameFolder` | `hash`, `oldPath`, `newPath` | 400, 409 |
 
+Notes for this project: `torrents/add` is sent as multipart with both `stopped` and `paused`; the `hashes`
+endpoints answer 200 for unknown hashes, so callers check existence first (`Sandbox`); and changes are
+asynchronous, so callers poll `torrents/info` (`Sandbox.wait_for`). Stage 3 records what 5.2.3 actually does.
+
 Out of scope: tracker/peer editing (`addTrackers`, `editTracker`, `removeTrackers`, `addPeers`), queue priority
 (`increasePrio` …), `filePrio`, `setSuperSeeding`, RSS, search.
 

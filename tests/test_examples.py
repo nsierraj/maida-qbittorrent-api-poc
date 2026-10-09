@@ -19,7 +19,8 @@ def env(qbt, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "load_dotenv", lambda *a, **k: None)  # never read the real .env
     for key, value in {
         "QBT_HOST": HOST, "QBT_PORT": str(PORT), "QBT_API_KEY": API_KEY,
-        "QBT_SANDBOX_TAG": "poc", "QBT_POC_OUT": str(tmp_path / "out"),
+        "QBT_SANDBOX_TAG": "poc", "QBT_SANDBOX_SAVEPATH": "/data/torrents/poc",
+        "QBT_POC_OUT": str(tmp_path / "out"), "QBT_TEST_MAGNET": "",
     }.items():
         monkeypatch.setenv(key, value)
     return qbt
@@ -146,3 +147,68 @@ def test_02_inspect_ambiguous_query_exits(env, monkeypatch):
 
     with pytest.raises(SystemExit, match="torrents match"):
         run("02_inspect.py", "iso", monkeypatch=monkeypatch)
+
+
+LUBUNTU_HASH = "e3fbc63821098e11d5be6230b737765980ac354d"
+
+
+def test_03_lifecycle(env, monkeypatch, capsys):
+    before = {t["hash"]: dict(t) for t in env.torrents}
+    run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "server answered: 'Ok.'" in out
+    assert "stop-on-add: honored" in out
+    assert "GET torrents/stop -> HTTP 405 (method enforced)" in out
+    assert "category created" in out and "unknown category -> HTTP 409" in out
+    assert "after add   : 'poc, poc-extra'" in out and "after remove: 'poc'" in out
+    assert out.count("refused locally") == 3 and "move outside the sandbox refused locally" in out
+    assert "name now 'poc-renamed-lubuntu'" in out
+    assert "save path now /data/torrents/poc/moved" in out
+    assert "removed tags ['poc-extra'], categories ['poc']" in out
+    assert "All lifecycle steps passed." in out
+    # Nothing outside the sandbox changed, and nothing was left behind.
+    assert {t["hash"]: t for t in env.torrents} == before
+    assert env.deleted_files == [LUBUNTU_HASH]
+    assert "poc" not in env.categories and "poc-extra" not in env.tags
+    assert API_KEY not in out
+
+
+def test_03_lifecycle_keep_then_cleanup(env, monkeypatch, capsys):
+    run("03_lifecycle.py", "--keep", "--run-seconds", "0", monkeypatch=monkeypatch)
+    assert "--keep: left" in capsys.readouterr().out
+    kept = env.torrent(LUBUNTU_HASH)
+    assert kept["state"] == "stoppedDL" and kept["save_path"] == "/data/torrents/poc/moved"
+
+    with pytest.raises(SystemExit, match="--cleanup first"):
+        run("03_lifecycle.py", monkeypatch=monkeypatch)
+
+    run("03_lifecycle.py", "--cleanup", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "Removed 1 sandbox torrent(s)" in out
+    assert env.torrent(LUBUNTU_HASH) is None and "poc" not in env.categories
+
+
+def test_03_refuses_a_magnet_already_outside_the_sandbox(env, monkeypatch, qbt):
+    monkeypatch.setenv("QBT_TEST_MAGNET", env.torrents[0]["magnet_uri"])
+    with pytest.raises(SystemExit, match="without the 'poc' tag"):
+        run("03_lifecycle.py", monkeypatch=monkeypatch)
+    assert not [e for m, e, _ in env.requests if m == "POST"]
+
+
+def test_03_needs_a_sandbox_path(env, monkeypatch):
+    monkeypatch.setenv("QBT_SANDBOX_SAVEPATH", "")
+    with pytest.raises(SystemExit, match="QBT_SANDBOX_SAVEPATH"):
+        run("03_lifecycle.py", monkeypatch=monkeypatch)
+
+
+def test_03_ignored_stop_on_add_is_reported_and_corrected(env, monkeypatch, capsys):
+    original = env._add
+
+    def add_running(p):
+        p = {**p, "stopped": "false", "paused": "false"}
+        return original(p)
+
+    env.routes["torrents/add"] = ("POST", add_running)
+    run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "stop-on-add: IGNORED" in out and "All lifecycle steps passed." in out
