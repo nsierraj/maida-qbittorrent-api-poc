@@ -36,9 +36,10 @@ PROBES = [
     ("Key + foreign Origin", "GET", "app/version", {"Origin": "http://evil.example"}, "key",
      {200: "CSRF check skipped for API keys", 401: "CSRF check applies to API keys"}),
     ("Key + Host: gluetun:<port>", "GET", "app/version", {"Host": "gluetun:{port}"}, "key",
-     {200: "container names accepted", 401: "host header validation rejects names not in 'Server domains'"}),
+     {200: "container names accepted (validation off, or the name is in 'Server domains')",
+      401: "host header validation rejects names not in 'Server domains'"}),
     ("Key + POST to a GET endpoint", "POST", "app/version", {}, "key",
-     {405: "method enforced (expected)", 200: "method not enforced"}),
+     {405: "GET endpoints refuse POST", 200: "GET endpoints also accept POST"}),
 ]
 
 

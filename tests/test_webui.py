@@ -8,7 +8,23 @@ def test_versions_and_build(api):
     assert api.app_version() == "v5.2.3"
     assert api.webapi_version() == "2.15.1"
     assert api.build_info()["libtorrent"].startswith("2.")
-    assert api.default_save_path() == "/data/torrents"
+    assert api.default_save_path() == "/data/torrents/completed"
+
+
+def test_security_settings_never_include_secrets(api, qbt):
+    settings = api.webui_security_settings()
+    assert settings["web_ui_max_auth_fail_count"] == 5
+    assert settings["web_ui_host_header_validation_enabled"] is False
+    assert "web_ui_password" not in settings and "proxy_password" not in settings
+    assert all(v not in str(settings) for v in ("fake-password-hash", "fake-proxy-secret"))
+
+
+def test_torrent_rows_have_the_real_field_set(api):
+    from qbittorrent_poc import TORRENT_FIELDS
+
+    row = api.list_torrents()[0]
+    assert set(row) == set(TORRENT_FIELDS)
+    assert "private" in row and "isPrivate" not in row
 
 
 def test_transfer_info(api, qbt):
@@ -70,7 +86,10 @@ def test_hashes_filter(api, qbt):
 
 
 def test_categories_and_tags(api):
-    assert api.categories()["linux"]["savePath"] == "/data/torrents/linux"
+    cats = api.categories()
+    assert cats["linux"]["savePath"] == "/data/torrents/linux"
+    assert cats["video"]["savePath"] == ""  # empty = default save path
+    assert cats["video"]["share_limit_action"] == "Default"
     assert set(api.tags()) == {"keep", "seed"}
 
 

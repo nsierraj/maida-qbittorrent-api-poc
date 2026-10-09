@@ -42,7 +42,8 @@ failures (`web_ui_max_auth_fail_count`, `web_ui_ban_duration`). Not used here.
 
 **Headers that matter.** The wiki says the `Referer` or `Origin` header must match the `Host` header's domain
 and port. qBittorrent also validates the `Host` header ("host header validation" in Web UI options): IP literals
-and `localhost` pass; any other hostname must be listed under *Server domains*. Both are probed in Stage 1.
+and `localhost` pass; any other hostname must be listed under *Server domains*. On the real server, API key
+requests skip the Referer/Origin check, and a container name in `Host` was accepted (Errata E2, E3).
 
 ## 3. Application (`app/`)
 
@@ -52,7 +53,7 @@ and `localhost` pass; any other hostname must be listed under *Server domains*. 
 | GET | `app/webapiVersion` | – | string, e.g. `2.15.1` |
 | GET | `app/buildInfo` | – | `{qt, libtorrent, boost, openssl: string, bitness: int}` |
 | GET | `app/defaultSavePath` | – | string |
-| GET | `app/preferences` | – | large settings object (read only in this project) |
+| GET | `app/preferences` | – | large settings object. Contains secrets (WebUI password hash, proxy and SMTP passwords): read only, and only the subset in `webui.WEBUI_SECURITY_PREFS` |
 
 Out of scope for this project: `app/setPreferences`, `app/shutdown`, `app/cookies`, `app/setCookies`.
 
@@ -66,7 +67,8 @@ Out of scope for this project: `app/setPreferences`, `app/shutdown`, `app/cookie
 
 `transfer/info` fields: `dl_info_speed`, `dl_info_data`, `up_info_speed`, `up_info_data`, `dl_rate_limit`,
 `up_rate_limit` (ints, bytes or bytes/s), `dht_nodes` (int), `connection_status` (`connected` | `firewalled` |
-`disconnected`). In `sync/maindata` the same object also carries `queueing`, `use_alt_speed_limits`, `refresh_interval`.
+`disconnected`), and, not on the wiki, `last_external_address_v4` / `_v6`: the public address peers see, which behind
+gluetun is the VPN exit IP (treat as sensitive). In `sync/maindata` the same object also carries `queueing`, `use_alt_speed_limits`, `refresh_interval`.
 
 Out of scope: `toggleSpeedLimitsMode`, `setDownloadLimit`, `setUploadLimit`, `banPeers`.
 
@@ -85,13 +87,17 @@ Out of scope: `toggleSpeedLimitsMode`, `setDownloadLimit`, `setUploadLimit`, `ba
 | `offset` | int | Start offset; negative counts from the end |
 | `hashes` | string | `\|`-separated hashes |
 
-Response: array of torrent objects. Fields (all present): `added_on`, `amount_left`, `auto_tmm`, `availability`,
-`category`, `completed`, `completion_on`, `content_path`, `dl_limit`, `dlspeed`, `downloaded`, `downloaded_session`,
-`eta`, `f_l_piece_prio`, `force_start`, `hash`, `isPrivate`, `last_activity`, `magnet_uri`, `max_ratio`,
-`max_seeding_time`, `name`, `num_complete`, `num_incomplete`, `num_leechs`, `num_seeds`, `priority`, `progress`
-(0–1), `ratio`, `ratio_limit`, `reannounce`, `save_path`, `seeding_time`, `seeding_time_limit`, `seen_complete`,
-`seq_dl`, `size`, `state`, `super_seeding`, `tags` (comma-separated string), `time_active`, `total_size`, `tracker`,
-`up_limit`, `uploaded`, `uploaded_session`, `upspeed`.
+Response: array of torrent objects. The 66 fields 5.2.3 actually sends are in `webui.TORRENT_FIELDS`. From the wiki:
+`added_on`, `amount_left`, `auto_tmm`, `availability`, `category`, `completed`, `completion_on`, `content_path`,
+`dl_limit`, `dlspeed`, `downloaded`, `downloaded_session`, `eta` (8640000 = ∞), `f_l_piece_prio`, `force_start`,
+`hash`, `last_activity`, `magnet_uri`, `max_ratio`, `max_seeding_time`, `name`, `num_complete`, `num_incomplete`,
+`num_leechs`, `num_seeds`, `priority`, `progress` (0–1), `ratio`, `ratio_limit`, `reannounce`, `save_path`,
+`seeding_time`, `seeding_time_limit`, `seen_complete`, `seq_dl`, `size`, `state`, `super_seeding`, `tags`
+(comma-separated string), `time_active`, `total_size`, `tracker`, `up_limit`, `uploaded`, `uploaded_session`,
+`upspeed`. Not on the wiki: `private` (replaces `isPrivate`), `comment`, `connections_count`, `connections_limit`,
+`created_by`, `creation_date`, `download_path`, `has_metadata`, `inactive_seeding_time_limit`, `infohash_v1`,
+`infohash_v2`, `max_inactive_seeding_time`, `piece_size`, `pieces_have`, `pieces_num`, `popularity`, `root_path`,
+`share_limit_action`, `total_wasted`, `trackers_count`.
 
 **`state` values** (5.x names; the wiki still lists `pausedUP`/`pausedDL`):
 
@@ -126,7 +132,7 @@ Response: array of torrent objects. Fields (all present): `added_on`, `amount_le
 | GET | `torrents/trackers` | `hash` | array of `{url, status, tier, num_peers, num_seeds, num_leeches, num_downloaded, msg}`. Status: 0 disabled (DHT/PeX/LSD rows, tier < 0), 1 not contacted, 2 working, 3 updating, 4 not working. |
 | GET | `torrents/webseeds` | `hash` | array of `{url}` |
 | GET | `torrents/pieceStates` | `hash` | array of ints: 0 missing, 1 downloading, 2 have |
-| GET | `torrents/categories` | – | object keyed by name: `{name, savePath}` |
+| GET | `torrents/categories` | – | object keyed by name: `{name, savePath, download_path, ratio_limit, seeding_time_limit, inactive_seeding_time_limit, share_limit_action}`. `savePath` `""` = default save path |
 | GET | `torrents/tags` | – | array of strings |
 
 ### 5.3 Sync and log
@@ -171,7 +177,7 @@ Out of scope: tracker/peer editing (`addTrackers`, `editTracker`, `removeTracker
 
 | WebAPI | qBittorrent | Change relevant here |
 | --- | --- | --- |
-| 2.11 | 5.0 | `torrents/pause` → `stop`, `torrents/resume` → `start`; `paused*` states → `stopped*`; `isPrivate` on `torrents/info` and `properties` |
+| 2.11 | 5.0 | `torrents/pause` → `stop`, `torrents/resume` → `start`; `paused*` states → `stopped*`; `isPrivate` on `torrents/info` and `properties` (5.2.3's `torrents/info` sends `private` instead, E5) |
 | 2.11.3 | 5.0.x | `app/cookies`, `app/setCookies`; `cookie` removed from `torrents/add` |
 | 2.14.1 | 5.2.0 | API key authentication (`Authorization: Bearer qbt_…`) |
 | 2.15.1 | 5.2.1–5.2.4 | Current target |
@@ -182,4 +188,28 @@ What the real server (qBittorrent 5.2.3, WebAPI 2.15.1, linuxserver image behind
 the wiki. Filled in as each stage runs against it. Each entry: date, endpoint, what the wiki says, what happened,
 what the library does.
 
-_(none yet; Stage 1 adds the API key, Referer and Host header findings)_
+### Stage 1 (2026-10-09, `examples/00_probe_auth.py` and `01_discover.py`)
+
+| Probe | HTTP | Meaning |
+| --- | --- | --- |
+| API key, no other headers | 200 | key accepted |
+| No key | 403 | auth required (expected) |
+| Wrong key | 403 | wrong key refused (expected) |
+| Key + matching Referer | 200 | same-origin Referer is fine |
+| Key + foreign Referer | 200 | CSRF check skipped for API keys |
+| Key + foreign Origin | 200 | CSRF check skipped for API keys |
+| Key + Host: gluetun:&lt;port&gt; | 200 | container name accepted |
+| Key + POST to a GET endpoint | 200 | GET endpoints also accept POST |
+
+| # | Endpoint | Wiki says | Real server | What the code does |
+| --- | --- | --- | --- | --- |
+| E1 | any | Login and SID cookie | API key as `Authorization: Bearer qbt_…` works; a missing or wrong key gets **403** `Forbidden` (not 401) | `QbtError.is_auth_error` covers 401 and 403 |
+| E2 | any | `Referer`/`Origin` must match `Host` | Not enforced for API key requests: foreign Referer and Origin both get 200 | Client sends neither header; fake skips the check for key requests |
+| E3 | any | Names other than IPs/localhost must be in *Server domains* | `Host: gluetun:8090` accepted. Either validation is off or the name is listed; `01_discover.py` [2b] now prints which | Stage 5 can address qBittorrent as `gluetun` on `synobridge`; fake accepts names unless `host_header_validation=True` |
+| E4 | any | Wrong method gets 405 | POST to a GET endpoint (`app/version`) gets 200. GET on a POST-only endpoint not yet probed (Stage 3) | Client always uses the documented method; fake refuses GET on POST-only endpoints, per qBittorrent's source |
+| E5 | `torrents/info` | `isPrivate` field | No `isPrivate`; sends `private` | `TORRENT_FIELDS` is the real 5.2.3 list |
+| E6 | `torrents/info` | 46 fields | 66 fields: 20 more (see §5.1) | Same |
+| E7 | `torrents/info` | `dl_limit`/`up_limit` −1 = unlimited | 0 for a torrent without a limit | `fmt.limit()` treats 0 and −1 as unlimited |
+| E8 | `transfer/info` | 8 fields | Also `last_external_address_v4` / `_v6`, the public (VPN exit) address | Shown on screen, redacted in samples |
+| E9 | `torrents/categories` | `{name, savePath}` | Also `download_path` (null), `ratio_limit`, `seeding_time_limit`, `inactive_seeding_time_limit` (−2 = global), `share_limit_action` (`Default`); `savePath` `""` = default save path | Fake uses the real shape |
+| E10 | `app/buildInfo` | `qt`, `libtorrent`, `boost`, `openssl`, `bitness` | Also `platform`, `zlib` | – |

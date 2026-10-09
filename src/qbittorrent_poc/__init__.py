@@ -4,12 +4,13 @@ from . import fmt
 from .client import QbtClient
 from .config import Settings, connect
 from .errors import QbtError
-from .webui import FILTERS, TORRENT_FIELDS, TORRENT_STATES, WebUI
+from .webui import FILTERS, TORRENT_FIELDS, TORRENT_STATES, WEBUI_SECURITY_PREFS, WebUI
 
 __all__ = [
     "FILTERS",
     "TORRENT_FIELDS",
     "TORRENT_STATES",
+    "WEBUI_SECURITY_PREFS",
     "QbtClient",
     "QbtError",
     "Settings",

@@ -1,7 +1,7 @@
 """Example 1: what does this qBittorrent look like? Read-only.
 
-Versions -> global transfer state -> torrents by state and by filter -> categories and tags ->
-fields and states the server returns that the wiki doesn't list. Finally it saves sanitized
+Versions -> global transfer state and WebUI security settings -> torrents by state and by
+filter -> categories and tags -> fields and states that differ from TORRENT_FIELDS/STATES. Finally it saves sanitized
 JSON samples to out/samples/ (gitignored) so the fake server in tests/ can follow the real one.
 """
 
@@ -18,6 +18,8 @@ from qbittorrent_poc.webui import split_tags
 
 REDACT = {"name", "magnet_uri", "tracker", "save_path", "content_path", "download_path",
           "root_path", "comment", "infohash_v1", "infohash_v2", "hash"}
+# transfer/info: the public address peers see (the VPN exit IP behind gluetun).
+REDACT_TRANSFER = {"last_external_address_v4", "last_external_address_v6"}
 
 
 def sanitize(torrents: list[dict]) -> list[dict]:
@@ -29,6 +31,15 @@ def sanitize(torrents: list[dict]) -> list[dict]:
         clean["hash"] = f"{i:040x}"
         out.append(clean)
     return out
+
+
+def sanitize_transfer(info: dict) -> dict:
+    return {k: ("<redacted>" if k in REDACT_TRANSFER and v else v) for k, v in info.items()}
+
+
+def out_dir() -> Path:
+    # `or`, not a getenv default: .env.example sets QBT_POC_OUT= (empty), which must mean "out".
+    return Path(os.getenv("QBT_POC_OUT") or "out") / "samples"
 
 
 def main() -> None:
@@ -48,12 +59,18 @@ def main() -> None:
         print("\n[2] Transfer state (transfer/info)")
         info = api.transfer_info()
         print(f"    connection  : {info.get('connection_status')}  (DHT nodes: {info.get('dht_nodes')})")
+        print(f"    external IP : {info.get('last_external_address_v4') or '-'}"
+              f"  {info.get('last_external_address_v6') or ''}  (what peers see: the VPN exit)")
         print(f"    download    : {fmt.speed(info['dl_info_speed'])}  limit {fmt.limit(info['dl_rate_limit'])}"
               f"  session total {fmt.size(info['dl_info_data'])}")
         print(f"    upload      : {fmt.speed(info['up_info_speed'])}  limit {fmt.limit(info['up_rate_limit'])}"
               f"  session total {fmt.size(info['up_info_data'])}")
         print(f"    alt limits  : {'on' if api.alt_speed_limits_enabled() else 'off'}")
         print(f"    save path   : {api.default_save_path()}  (container path)")
+
+        print("\n[2b] WebUI request checks (subset of app/preferences)")
+        for key, value in api.webui_security_settings().items():
+            print(f"    {key:<40} {value}")
 
         torrents = api.list_torrents()
         print(f"\n[3] Torrents (torrents/info): {len(torrents)} in total, "
@@ -84,28 +101,29 @@ def main() -> None:
         print(f"    sandbox tag {sandbox!r}: {'exists' if sandbox in tags else 'not created yet'}, "
               f"{per_tag.get(sandbox, 0)} torrents")
 
-        print("\n[5] Server vs wiki")
+        print("\n[5] Server vs reference (webui.TORRENT_FIELDS / TORRENT_STATES)")
         seen_fields = set().union(*(t.keys() for t in torrents)) if torrents else set()
         extra = sorted(seen_fields - set(TORRENT_FIELDS))
         missing = sorted(set(TORRENT_FIELDS) - seen_fields) if torrents else []
         unknown_states = sorted({t["state"] for t in torrents} - set(TORRENT_STATES))
-        print(f"    fields not in the wiki : {', '.join(extra) or 'none'}")
-        print(f"    wiki fields not sent   : {', '.join(missing) or 'none'}")
-        print(f"    undocumented states    : {', '.join(unknown_states) or 'none'}")
+        print(f"    new fields             : {', '.join(extra) or 'none'}")
+        print(f"    fields not sent        : {', '.join(missing) or 'none'}")
+        print(f"    unknown states         : {', '.join(unknown_states) or 'none'}")
 
-        out_dir = Path(os.getenv("QBT_POC_OUT", "out")) / "samples"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir()
+        target.mkdir(parents=True, exist_ok=True)
         samples = {
             "app.json": {"version": api.app_version(), "webapiVersion": api.webapi_version(),
                          "buildInfo": build},
-            "transfer_info.json": info,
+            "transfer_info.json": sanitize_transfer(info),
             "torrents_info.json": sanitize(torrents),
             "categories.json": categories,
             "tags.json": tags,
         }
         for name, data in samples.items():
-            (out_dir / name).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-        print(f"\n[6] Sanitized samples written to {out_dir}/ (names, hashes, paths, trackers redacted)")
+            (target / name).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        print(f"\n[6] Sanitized samples written to {target}/ "
+              "(names, hashes, paths, trackers and external IPs redacted)")
 
 
 if __name__ == "__main__":
