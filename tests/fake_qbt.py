@@ -11,6 +11,10 @@ It models the behavior observed on the real server (qBittorrent 5.2.3, WebAPI 2.
   the fake instead refuses names that aren't IPs, localhost or in `server_domains` (401).
 - GET-only endpoints also accept POST. POST-only endpoints refuse GET with 405 (per
   qBittorrent's source; to be confirmed on the real server in Stage 3).
+- Stage 2 endpoints (properties, files, trackers, peers, maindata, log) follow the wiki or
+  qBittorrent's source and are unverified until examples/02_inspect.py runs on the real server.
+  Unknown hashes get 404. sync/maindata and sync/torrentPeers return deltas when given the rid
+  of an earlier response, and everything when the rid is 0 or unknown.
 - Version strings come back as text/plain. torrents/info sends `private`, not the wiki's
   `isPrivate`, plus 20 fields the wiki doesn't list; limits use 0 for unlimited.
 
@@ -21,6 +25,7 @@ server; when they differ, the real server wins and this file follows.
 
 from __future__ import annotations
 
+import copy
 import ipaddress
 import json
 from typing import Any
@@ -28,7 +33,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from qbittorrent_poc.webui import TORRENT_FIELDS
+from qbittorrent_poc.fields import TORRENT_FIELDS
 
 API_KEY = "qbt_fakekeyfakekeyfakekey"
 HOST = "192.0.2.10"  # TEST-NET-1, never a real NAS
@@ -143,6 +148,17 @@ class FakeQbt:
         }
         self.tags: list[str] = ["keep", "seed"]
         self.alt_speed = False
+        self.free_space = 1_200_000_000_000
+        self.log: list[dict[str, Any]] = [
+            {"id": 0, "type": 1, "timestamp": 1_790_000_000, "message": "qBittorrent v5.2.3 started"},
+            {"id": 1, "type": 2, "timestamp": 1_790_000_001, "message": "Using config directory: /config/qBittorrent"},
+            {"id": 2, "type": 2, "timestamp": 1_790_000_002, "message": "Trying to listen on: 0.0.0.0:6881"},
+            {"id": 3, "type": 4, "timestamp": 1_790_000_100, "message": "Tracker error: timed out. Torrent: debian"},
+            {"id": 4, "type": 8, "timestamp": 1_790_000_200, "message": "File error alert. Reason: disk full"},
+        ]
+        self._rid = 0
+        self._sync_snapshots: dict[int, dict[str, Any]] = {}
+        self._peer_snapshots: dict[tuple[str, int], dict[str, Any]] = {}
         self.requests: list[tuple[str, str, dict[str, Any]]] = []  # (method, endpoint, params/data)
         self.routes = {
             "app/version": ("GET", lambda p: _response(200, self.version)),
@@ -157,6 +173,13 @@ class FakeQbt:
             "torrents/info": ("GET", self._torrents_info),
             "torrents/categories": ("GET", lambda p: _response(200, self.categories)),
             "torrents/tags": ("GET", lambda p: _response(200, self.tags)),
+            "torrents/properties": ("GET", self._with_torrent(self._properties)),
+            "torrents/files": ("GET", self._with_torrent(self._files)),
+            "torrents/trackers": ("GET", self._with_torrent(self._trackers)),
+            "torrents/webseeds": ("GET", self._with_torrent(lambda t, p: [])),
+            "sync/torrentPeers": ("GET", self._with_torrent(self._torrent_peers)),
+            "sync/maindata": ("GET", self._maindata),
+            "log/main": ("GET", self._main_log),
             "auth/login": ("POST", lambda p: _response(200, "Fails.")),
         }
 
@@ -246,3 +269,166 @@ class FakeQbt:
         if "limit" in p and int(p["limit"]) > 0:
             items = items[: int(p["limit"])]
         return _response(200, items)
+
+    # -- Stage 2: per-torrent detail ------------------------------------------------------
+    def torrent(self, torrent_hash: str) -> dict[str, Any] | None:
+        return next((t for t in self.torrents if t["hash"] == torrent_hash), None)
+
+    def _with_torrent(self, handler: Any) -> Any:
+        def wrapped(p: dict[str, Any]) -> requests.Response:
+            t = self.torrent(p.get("hash", ""))
+            if t is None:
+                return _response(404, "Not Found")
+            return _response(200, handler(t, p))
+        return wrapped
+
+    @staticmethod
+    def _properties(t: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "save_path": t["save_path"], "creation_date": t["creation_date"], "piece_size": t["piece_size"],
+            "comment": t["comment"], "total_wasted": t["total_wasted"], "total_uploaded": t["uploaded"],
+            "total_uploaded_session": t["uploaded_session"], "total_downloaded": t["downloaded"],
+            "total_downloaded_session": t["downloaded_session"], "up_limit": t["up_limit"],
+            "dl_limit": t["dl_limit"], "time_elapsed": t["time_active"], "seeding_time": t["seeding_time"],
+            "nb_connections": t["connections_count"], "nb_connections_limit": t["connections_limit"],
+            "share_ratio": t["ratio"], "addition_date": t["added_on"], "completion_date": t["completion_on"],
+            "created_by": t["created_by"], "dl_speed_avg": t["dlspeed"], "dl_speed": t["dlspeed"],
+            "eta": t["eta"], "last_seen": t["seen_complete"], "peers": t["num_leechs"],
+            "peers_total": t["num_incomplete"], "pieces_have": t["pieces_have"], "pieces_num": t["pieces_num"],
+            "reannounce": t["reannounce"], "seeds": t["num_seeds"], "seeds_total": t["num_complete"],
+            "total_size": t["total_size"], "up_speed_avg": t["upspeed"], "up_speed": t["upspeed"],
+            "isPrivate": t["private"],
+        }
+
+    @staticmethod
+    def _files(t: dict[str, Any], p: dict[str, Any]) -> list[dict[str, Any]]:
+        last_piece = t["pieces_num"] - 1
+        if t["name"].endswith(".mkv"):  # a multi-file torrent: folder with video, subtitles, an nfo
+            folder = t["name"].removesuffix(".mkv")
+            parts = [(f"{folder}/{t['name']}", t["size"] - 60_000, 1), (f"{folder}/{folder}.en.srt", 50_000, 1),
+                     (f"{folder}/{folder}.nfo", 10_000, 0)]
+        else:
+            parts = [(t["name"], t["size"], 1)]
+        rows = []
+        for i, (name, size, prio) in enumerate(parts):
+            rows.append({"index": i, "name": name, "size": size, "priority": prio,
+                         "progress": t["progress"] if prio else 0.0, "is_seed": t["progress"] >= 1,
+                         "piece_range": [0, last_piece], "availability": 1.0})
+        wanted = p.get("indexes")
+        if wanted:
+            keep = {int(x) for x in wanted.split("|")}
+            rows = [r for r in rows if r["index"] in keep]
+        return rows
+
+    @staticmethod
+    def _trackers(t: dict[str, Any], p: dict[str, Any]) -> list[dict[str, Any]]:
+        pseudo = [{"url": f"** [{name}] **", "status": 2 if name != "LSD" else 0, "tier": -1,
+                   "num_peers": 0, "num_seeds": 0, "num_leeches": 0, "num_downloaded": 0, "msg": ""}
+                  for name in ("DHT", "PeX", "LSD")]
+        real = [
+            {"url": "https://tracker.example.org/announce", "status": 2, "tier": 0, "num_peers": 40,
+             "num_seeds": 31, "num_leeches": 9, "num_downloaded": 1200, "msg": ""},
+            {"url": "udp://tracker.example.net:1337/announce", "status": 4, "tier": 1, "num_peers": -1,
+             "num_seeds": -1, "num_leeches": -1, "num_downloaded": -1, "msg": "timed out"},
+        ]
+        return pseudo + real
+
+    def _peer_rows(self, t: dict[str, Any]) -> dict[str, Any]:
+        if t["state"] in ("stoppedDL", "stoppedUP"):
+            return {}
+        n = int(t["hash"][:2], 16)
+        return {
+            f"198.51.100.{n}:51413": {
+                "client": "qBittorrent/5.1.2", "connection": "BT", "country": "Netherlands",
+                "country_code": "nl", "dl_speed": t["dlspeed"], "downloaded": 1_000_000, "files": "",
+                "flags": "D X E P", "flags_desc": "D = Currently downloading", "ip": f"198.51.100.{n}",
+                "peer_id_client": "-qB5120-", "port": 51413, "progress": 1.0, "relevance": 1.0,
+                "up_speed": t["upspeed"], "uploaded": 20_000},
+            f"198.51.100.{n + 100}:6881": {
+                "client": "Transmission 4.0.6", "connection": "μTP", "country": "Canada",
+                "country_code": "ca", "dl_speed": 0, "downloaded": 0, "files": "", "flags": "u I",
+                "flags_desc": "u = Peer wants data", "ip": f"198.51.100.{n + 100}",
+                "peer_id_client": "-TR4060-", "port": 6881, "progress": 0.3, "relevance": 0.0,
+                "up_speed": 0, "uploaded": 0},
+        }
+
+    def _next_rid(self) -> int:
+        self._rid += 1
+        return self._rid
+
+    def _torrent_peers(self, t: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
+        peers = self._peer_rows(t)
+        rid = int(p.get("rid") or 0)
+        old = self._peer_snapshots.get((t["hash"], rid))
+        new_rid = self._next_rid()
+        self._peer_snapshots[(t["hash"], new_rid)] = copy.deepcopy(peers)
+        if old is None:
+            return {"full_update": True, "peers": peers, "rid": new_rid, "show_flags": True}
+        body: dict[str, Any] = {"rid": new_rid, "show_flags": True,
+                                "peers": {k: _changed(old.get(k, {}), v) for k, v in peers.items()
+                                          if old.get(k) != v}}
+        removed = sorted(set(old) - set(peers))
+        if removed:
+            body["peers_removed"] = removed
+        return body
+
+    def server_state(self) -> dict[str, Any]:
+        info = json.loads(self._transfer_info({}).content)
+        info.update(
+            alltime_dl=900_000_000_000, alltime_ul=120_000_000_000, average_time_queue=0,
+            free_space_on_disk=self.free_space, global_ratio="0.13", queued_io_jobs=0,
+            queueing=False, read_cache_hits="0", read_cache_overload="0", refresh_interval=1500,
+            total_buffers_size=0, total_peer_connections=sum(len(self._peer_rows(t)) for t in self.torrents),
+            total_queued_size=0, total_wasted_session=0, use_alt_speed_limits=self.alt_speed,
+            use_subcategories=False, write_cache_overload="0",
+        )
+        return info
+
+    def _sync_state(self) -> dict[str, Any]:
+        return {"torrents": {t["hash"]: {k: v for k, v in t.items() if k != "hash"} for t in self.torrents},
+                "categories": copy.deepcopy(self.categories), "tags": list(self.tags),
+                "server_state": self.server_state()}
+
+    def _maindata(self, p: dict[str, Any]) -> requests.Response:
+        state = self._sync_state()
+        rid = int(p.get("rid") or 0)
+        old = self._sync_snapshots.get(rid)
+        new_rid = self._next_rid()
+        self._sync_snapshots[new_rid] = copy.deepcopy(state)
+        if old is None:
+            return _response(200, {"rid": new_rid, "full_update": True, **state})
+        body: dict[str, Any] = {"rid": new_rid}
+        torrents = {h: _changed(old["torrents"].get(h, {}), row) for h, row in state["torrents"].items()
+                    if old["torrents"].get(h) != row}
+        if torrents:
+            body["torrents"] = torrents
+        removed = sorted(set(old["torrents"]) - set(state["torrents"]))
+        if removed:
+            body["torrents_removed"] = removed
+        cats = {k: v for k, v in state["categories"].items() if old["categories"].get(k) != v}
+        if cats:
+            body["categories"] = cats
+        if gone := sorted(set(old["categories"]) - set(state["categories"])):
+            body["categories_removed"] = gone
+        if added := [t for t in state["tags"] if t not in old["tags"]]:
+            body["tags"] = added
+        if dropped := [t for t in old["tags"] if t not in state["tags"]]:
+            body["tags_removed"] = dropped
+        if server := _changed(old["server_state"], state["server_state"]):
+            body["server_state"] = server
+        return _response(200, body)
+
+    def _main_log(self, p: dict[str, Any]) -> requests.Response:
+        wanted = {bit for name, bit in (("normal", 1), ("info", 2), ("warning", 4), ("critical", 8))
+                  if p.get(name, "true").lower() != "false"}
+        after = int(p.get("last_known_id", -1))
+        return _response(200, [e for e in self.log if e["type"] in wanted and e["id"] > after])
+
+    def add_log(self, message: str, type_: int = 2) -> None:
+        self.log.append({"id": len(self.log), "type": type_, "timestamp": 1_790_001_000 + len(self.log),
+                         "message": message})
+
+
+def _changed(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """The keys of `new` whose values differ from `old` (how sync deltas report rows)."""
+    return {k: v for k, v in new.items() if old.get(k) != v}

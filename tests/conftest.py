@@ -1,8 +1,16 @@
+import time
+
 import pytest
 
 from qbittorrent_poc import QbtClient, WebUI
 
 from .fake_qbt import API_KEY, HOST, PORT, FakeQbt
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    """Examples wait between sync calls; tests don't need to."""
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
 
 
 @pytest.fixture

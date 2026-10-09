@@ -9,39 +9,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .client import QbtClient
-
-# torrents/info fields, as sent by the real server (qBittorrent 5.2.3, WebAPI 2.15.1, recorded
-# 2026-10-09). The wiki (5.0) lists fewer and says `isPrivate`; 5.2.3 sends `private` instead.
-# examples/01_discover.py reports any difference.
-TORRENT_FIELDS = (
-    "added_on", "amount_left", "auto_tmm", "availability", "category", "comment", "completed",
-    "completion_on", "connections_count", "connections_limit", "content_path", "created_by",
-    "creation_date", "dl_limit", "dlspeed", "download_path", "downloaded", "downloaded_session",
-    "eta", "f_l_piece_prio", "force_start", "has_metadata", "hash", "inactive_seeding_time_limit",
-    "infohash_v1", "infohash_v2", "last_activity", "magnet_uri", "max_inactive_seeding_time",
-    "max_ratio", "max_seeding_time", "name", "num_complete", "num_incomplete", "num_leechs",
-    "num_seeds", "piece_size", "pieces_have", "pieces_num", "popularity", "priority", "private",
-    "progress", "ratio", "ratio_limit", "reannounce", "root_path", "save_path", "seeding_time",
-    "seeding_time_limit", "seen_complete", "seq_dl", "share_limit_action", "size", "state",
-    "super_seeding", "tags", "time_active", "total_size", "total_wasted", "tracker",
-    "trackers_count", "up_limit", "uploaded", "uploaded_session", "upspeed",
-)
-
-# app/preferences keys that explain how the WebUI treats requests. Never return preferences
-# wholesale: they include secrets (proxy and SMTP passwords, the WebUI password hash).
-WEBUI_SECURITY_PREFS = (
-    "web_ui_port", "web_ui_host_header_validation_enabled", "web_ui_domain_list",
-    "web_ui_csrf_protection_enabled", "web_ui_clickjacking_protection_enabled",
-    "bypass_local_auth", "bypass_auth_subnet_whitelist_enabled", "web_ui_max_auth_fail_count",
-    "web_ui_ban_duration", "web_ui_session_timeout", "use_https", "web_ui_reverse_proxy_enabled",
-)
-
-# Torrent `state` values in qBittorrent 5.x (the wiki still says pausedUP/pausedDL).
-TORRENT_STATES = (
-    "error", "missingFiles", "uploading", "stoppedUP", "queuedUP", "stalledUP", "checkingUP",
-    "forcedUP", "allocating", "downloading", "metaDL", "forcedMetaDL", "stoppedDL", "queuedDL",
-    "stalledDL", "checkingDL", "forcedDL", "checkingResumeData", "moving", "unknown",
-)
+from .fields import TORRENT_FIELDS, TORRENT_STATES, WEBUI_SECURITY_PREFS  # noqa: F401  (re-exported)
 
 # torrents/info `filter` values in qBittorrent 5.x (the wiki's `paused` is now `stopped`).
 FILTERS = (
@@ -127,3 +95,76 @@ class WebUI:
 
     def tags(self) -> list[str]:
         return self.client.get("torrents/tags")
+
+    # -- UC-05: find a torrent ----------------------------------------------------
+    def find_torrents(self, query: str) -> list[dict[str, Any]]:
+        """Torrents whose hash starts with `query` (case-insensitive) or whose name contains it.
+
+        An exact hash match wins outright. Matching is done here: the API has no search.
+        """
+        q = query.strip().lower()
+        if not q:
+            raise ValueError("Give a hash, a hash prefix, or part of a torrent name.")
+        torrents = self.list_torrents()
+        exact = [t for t in torrents if t["hash"].lower() == q]
+        if exact:
+            return exact
+        return [t for t in torrents if t["hash"].lower().startswith(q) or q in t["name"].lower()]
+
+    def resolve_hash(self, query: str) -> str:
+        """The single torrent matching `query` (see find_torrents), else ValueError listing matches."""
+        found = self.find_torrents(query)
+        if len(found) == 1:
+            return found[0]["hash"]
+        if not found:
+            raise ValueError(f"No torrent matches {query!r}.")
+        names = "; ".join(f"{t['hash'][:8]} {t['name']}" for t in found[:5])
+        raise ValueError(f"{len(found)} torrents match {query!r}: {names}. Be more specific.")
+
+    # -- UC-06: torrent details ---------------------------------------------------
+    def properties(self, torrent_hash: str) -> dict[str, Any]:
+        """torrents/properties. Unknown hash: QbtError 404."""
+        return self.client.get("torrents/properties", hash=torrent_hash)
+
+    def files(self, torrent_hash: str, indexes: Iterable[int] | None = None) -> list[dict[str, Any]]:
+        """torrents/files: [{index, name, size, progress, priority, is_seed, piece_range, availability}]."""
+        idx = "|".join(str(i) for i in indexes) if indexes is not None else None
+        return self.client.get("torrents/files", hash=torrent_hash, indexes=idx)
+
+    def trackers(self, torrent_hash: str) -> list[dict[str, Any]]:
+        """torrents/trackers, including the DHT/PeX/LSD pseudo-rows (tier < 0)."""
+        return self.client.get("torrents/trackers", hash=torrent_hash)
+
+    def webseeds(self, torrent_hash: str) -> list[dict[str, Any]]:
+        return self.client.get("torrents/webseeds", hash=torrent_hash)
+
+    # -- UC-07: peers ---------------------------------------------------------------
+    def peers(self, torrent_hash: str, rid: int = 0) -> dict[str, Any]:
+        """sync/torrentPeers: {rid, full_update, peers: {"ip:port": {...}}, peers_removed?}.
+
+        Pass the returned rid back to get only what changed since.
+        """
+        return self.client.get("sync/torrentPeers", hash=torrent_hash, rid=rid)
+
+    # -- UC-08: incremental sync ------------------------------------------------------
+    def maindata(self, rid: int = 0) -> dict[str, Any]:
+        """sync/maindata. rid=0: everything (full_update=true). Pass the returned rid back to get
+        only changes: partial torrent rows, *_removed lists and changed server_state keys."""
+        return self.client.get("sync/maindata", rid=rid)
+
+    # -- UC-09: logs ---------------------------------------------------------------------
+    def main_log(
+        self,
+        *,
+        normal: bool = True,
+        info: bool = True,
+        warning: bool = True,
+        critical: bool = True,
+        last_known_id: int = -1,
+    ) -> list[dict[str, Any]]:
+        """log/main: [{id, message, timestamp, type}], oldest first. type: 1 normal, 2 info,
+        4 warning, 8 critical. last_known_id returns only newer entries."""
+        return self.client.get(
+            "log/main", normal=normal, info=info, warning=warning, critical=critical,
+            last_known_id=last_known_id,
+        )

@@ -96,3 +96,53 @@ def test_01_discover_reports_new_fields(env, monkeypatch, capsys):
     assert "new fields             : brand_new_field" in out
     assert "fields not sent        : popularity" in out
     assert "unknown states         : brandNewState" in out
+
+
+def test_02_inspect_default_is_newest(env, monkeypatch, capsys, tmp_path):
+    run("02_inspect.py", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    newest = max(env.torrents, key=lambda t: t["added_on"])
+    assert f"[1] Torrent: {newest['name']}" in out
+    assert "[10] Errors" in out and "as documented: 404" in out
+
+
+def test_02_inspect_by_name(env, monkeypatch, capsys, tmp_path):
+    run("02_inspect.py", "ubuntu", "--wait", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "[1] Torrent: ubuntu-26.04-desktop-amd64.iso" in out
+    assert "1 files, 0 skipped" in out
+    assert "tier -1  working" in out and "not working" in out
+    assert "2 connected" in out and "clients" in out
+    assert "full_update True" in out and "free_space_on_disk" in out
+    assert "warning 1" in out and "critical 1" in out
+    assert "entries after id 4: 0 (last_known_id works as documented)" in out
+    # Reference sets match the fake, so nothing new is reported yet.
+    assert out.count("new: none") == 6
+
+    # Safe to paste: no tracker paths, peer IPs, external IP or key.
+    assert "/announce" not in out and "198.51.100." not in out and "203.0.113.7" not in out
+    assert API_KEY not in out
+    assert "https://tracker.example.org " in out
+
+    sample_dir = tmp_path / "out" / "samples"
+    for name in ("properties.json", "files.json", "trackers.json", "torrent_peers.json",
+                 "maindata_full.json", "maindata_delta.json", "log_main.json"):
+        text = (sample_dir / name).read_text()
+        for t in env.torrents:
+            assert t["name"] not in text and t["hash"] not in text
+        assert "198.51.100." not in text and "203.0.113.7" not in text and "/announce" not in text
+
+
+def test_02_inspect_multi_file_and_stopped(env, monkeypatch, capsys):
+    run("02_inspect.py", "bunny", "--wait", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "3 files, 1 skipped" in out and "skip" in out
+    run("02_inspect.py", "debian", "--wait", "0", monkeypatch=monkeypatch)
+    assert "0 connected  (the torrent is stopped)" in capsys.readouterr().out
+
+
+def test_02_inspect_ambiguous_query_exits(env, monkeypatch):
+    import pytest
+
+    with pytest.raises(SystemExit, match="torrents match"):
+        run("02_inspect.py", "iso", monkeypatch=monkeypatch)
