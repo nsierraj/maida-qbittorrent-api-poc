@@ -9,10 +9,14 @@ one after torrents/add (which answers before the torrent appears).
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import ipaddress
+import socket
+from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 MAX_TORRENT_BYTES = 10 * 1024 * 1024
+MAX_REDIRECTS = 5
 
 
 class TorrentFileError(ValueError):
@@ -82,6 +86,7 @@ class TorrentFile:
     name: str
     size: int | None  # total payload bytes; None for v2-only file trees
     webseeds: tuple[str, ...]
+    raw: bytes = field(default=b"", repr=False)  # the file itself, for uploading to qBittorrent
 
 
 def parse(data: bytes) -> TorrentFile:
@@ -111,32 +116,76 @@ def parse(data: bytes) -> TorrentFile:
         name=info.get(b"name", b"").decode("utf-8", "replace"),
         size=size,
         webseeds=tuple(s.decode("utf-8", "replace") for s in seeds if isinstance(s, bytes)),
+        raw=data,
     )
 
 
+def _resolve(host: str, port: int) -> list[str]:
+    """Every address `host` resolves to (patched in tests)."""
+    return sorted({info[4][0] for info in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)})
+
+
+def check_public_url(url: str) -> None:
+    """Refuse URLs that aren't http(s) or whose host resolves to a non-public address.
+
+    Whoever runs the fetch (the MCP server inside the NAS, typically) could otherwise be pointed
+    at DSM, the LAN, a container's control port or cloud metadata endpoints (SSRF). Every address
+    the name resolves to must be globally routable. A name that re-resolves differently between
+    this check and the connection (DNS rebinding) isn't covered; the file is only ever parsed as
+    bencode, and qBittorrent is handed the bytes, never the URL.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise TorrentFileError("Only http(s) URLs of .torrent files can be fetched.")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        ipaddress.ip_address(parts.hostname.split("%")[0])
+        literal = True
+    except ValueError:
+        literal = False
+    try:
+        addresses = [parts.hostname] if literal else _resolve(parts.hostname, port)
+    except (socket.gaierror, UnicodeError) as e:
+        raise TorrentFileError(f"Can't resolve {parts.hostname}: {e}") from e
+    if not addresses:
+        raise TorrentFileError(f"Can't resolve {parts.hostname}.")
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            raise TorrentFileError(
+                f"Refused: {parts.hostname} resolves to {ip}, a private or internal address. "
+                "Only public http(s) URLs of .torrent files are fetched."
+            )
+
+
 def fetch(url: str, *, timeout: float = 30) -> TorrentFile:
-    """Download a .torrent file over http(s) (at most MAX_TORRENT_BYTES) and parse it."""
+    """Download a .torrent file from a public http(s) URL (at most MAX_TORRENT_BYTES) and parse it.
+    Redirects are followed by hand so that every hop passes check_public_url()."""
     import requests
 
-    if not url.startswith(("http://", "https://")):
-        raise TorrentFileError("Only http(s) URLs of .torrent files can be fetched.")
-    try:
-        with requests.get(url, timeout=timeout, stream=True) as resp:
-            resp.raise_for_status()
-            data = b""
-            for chunk in resp.iter_content(64 * 1024):
-                data += chunk
-                if len(data) > MAX_TORRENT_BYTES:
-                    raise TorrentFileError("Larger than any sensible .torrent file.")
-    except requests.RequestException as e:
-        raise TorrentFileError(f"Couldn't download {url}: {e}") from e
-    return parse(data)
+    for _ in range(MAX_REDIRECTS + 1):
+        check_public_url(url)
+        try:
+            with requests.get(url, timeout=timeout, stream=True, allow_redirects=False) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+                    url = urljoin(url, resp.headers["Location"])
+                    continue
+                resp.raise_for_status()
+                data = b""
+                for chunk in resp.iter_content(64 * 1024):
+                    data += chunk
+                    if len(data) > MAX_TORRENT_BYTES:
+                        raise TorrentFileError("Larger than any sensible .torrent file.")
+        except requests.RequestException as e:
+            raise TorrentFileError(f"Couldn't download {url}: {e}") from e
+        return parse(data)
+    raise TorrentFileError(f"More than {MAX_REDIRECTS} redirects.")
 
 
 def identify(source: str) -> tuple[str, str, TorrentFile | None]:
     """(info hash, display name, parsed file or None) for a magnet link or a .torrent URL, before
     adding it: torrents/add answers before the torrent exists, so callers need the hash first."""
-    from urllib.parse import parse_qs, urlsplit
+    from urllib.parse import parse_qs
 
     from .webui import magnet_hash
 

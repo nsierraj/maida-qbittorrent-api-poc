@@ -181,6 +181,18 @@ async def test_add_refusals(qbt):
 
 
 @pytest.mark.anyio
+async def test_add_by_url_uploads_the_file_and_refuses_internal_urls(qbt, dns):
+    server = make_server(writes=True)
+    payload(await call(server, "qbt_add_torrent", source=ARCH_URL))
+    add = [d for _, e, d in qbt.requests if e == "torrents/add"][-1]
+    assert "urls" not in add and len(add["_files"]) == 1  # bytes, never the URL
+    dns["nas.lan"] = ["192.168.1.50"]
+    refused = await call(server, "qbt_add_torrent", source="http://nas.lan:5000/webapi/entry.cgi")
+    assert "private or internal" in error_text(refused)
+    assert "http://nas.lan:5000/webapi/entry.cgi" not in qbt.downloads
+
+
+@pytest.mark.anyio
 async def test_add_started_and_with_category(qbt):
     added = payload(await call(make_server(writes=True), "qbt_add_torrent", source=LUBUNTU,
                                category="linux", tags=["extra"], start=True))

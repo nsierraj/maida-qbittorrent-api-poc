@@ -7,7 +7,8 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 - `uv sync`: install (Python 3.11–3.13; `.python-version` pins 3.13 to match CI and the container image)
 - `uv run pytest`: the whole suite, against the fake qBittorrent. Must pass before any commit. CI runs it on Python 3.11–3.13.
 - `uv run qbittorrent-mcp`: the MCP server (stdio). It reads the same `.env`; `QBT_MCP_ALLOW_WRITES` and `QBT_MCP_ALLOW_DELETE` enable the change and delete tools.
-- `uv run examples/0N_*.py`: real-NAS runs. They need `.env` and are run by the user. Write examples only touch torrents tagged `QBT_SANDBOX_TAG`.
+- `uv run examples/0N_*.py`: real-NAS runs. They need `.env` (it's on this Mac and the NAS is reachable), so they can be run from here once the user gives the go-ahead for that stage; say afterwards what changed on the NAS and confirm it's clean. Write examples only touch torrents tagged `QBT_SANDBOX_TAG`.
+- `Dockerfile` / `docker-compose.yml`: the HTTP server as a Container Manager project on the NAS (x86_64, ports 127.0.0.1:8766 → DSM reverse proxy 8444). No local Docker here; CI's `docker build` job checks the image. SSH to the NAS works (`ssh synology`, admin), but `docker` needs `sudo` with a password, so starting the container is the user's step.
 
 ## Code
 
@@ -24,6 +25,7 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 - **API key auth only** (`Authorization: Bearer qbt_…`, qBittorrent ≥ 5.2). No cookie login, no password in `.env`. Keys cannot call `auth/login`/`auth/logout`; `app/webapiVersion` is the auth probe.
 - **Sandbox by tag.** The NAS has real torrents. Anything that changes state goes through `Sandbox`, which applies `TorrentPolicy` before sending anything: only torrents tagged `QBT_SANDBOX_TAG` (default `poc`), never `all`, the sandbox tag can't be removed, paths stay inside `QBT_SANDBOX_SAVEPATH`, and writes and deletes are separate opt-ins. `add` always applies the tag. Raw `WebUI` write methods exist for tests; don't call them from examples or the MCP server. Tests assert that refused calls send no request.
 - **Paths in API calls are container paths** (`/data/torrents/...`), not NAS paths (`/volume1/data/torrents/...`), because qBittorrent runs in a container.
+- **URL fetches must stay public.** `torrentfile.fetch()` refuses non-public addresses (every resolved address and every redirect hop) and the bytes are uploaded to qBittorrent, never the URL. Inside the NAS anything else would let a tool reach DSM or the LAN. Tests stub DNS (`dns` fixture); never make real lookups in tests.
 - **The fake can't prove the wire format.** A new API call needs a real-NAS run (an example script) before it becomes an MCP tool.
 - **Order for new operations:** library method + fake + test → real-NAS example → MCP tool → docs (`use-cases.md`, `mcp-server.md`).
 - **Nothing in the library or the MCP server may print to stdout**; with the stdio transport, stdout is the protocol channel. Use `logging` to stderr.

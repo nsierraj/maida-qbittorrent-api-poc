@@ -6,6 +6,9 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 ## [Unreleased]
 
 ### Added
+- Stage 5: HTTP transport for the MCP server (`QBT_MCP_TRANSPORT=http`). It uses streamable HTTP with plain JSON responses, requires a bearer token (`QBT_MCP_TOKEN`, at least 32 characters) on every request, and leaves `GET /healthz` open. stdio stays the default.
+- `Dockerfile`, `docker-compose.yml` (`127.0.0.1:8766`) and `.env.container.example` for Synology Container Manager behind DSM's reverse proxy (8444), documented in `docs/mcp-server.md`. CI builds and runs the image; Dependabot watches its base images.
+- `WebUI.add()`/`Sandbox.add()` accept `.torrent` file contents (`torrent_files`), uploaded as `torrents` parts (errata E22).
 - Stage 4, the `qbittorrent_mcp` MCP server (`qbittorrent-mcp`, stdio).
   - Six read tools: server info, a paged torrent list, torrent details, categories and tags, "what changed" via `sync/maindata`, and the log.
   - Nine change tools behind `QBT_MCP_ALLOW_WRITES`: add, stop, start, recheck, category, add/remove tags, rename, move.
@@ -35,6 +38,7 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 - `docs/qbittorrent/reference-compose.yml`: redacted copy of the qBittorrent + gluetun compose project on the NAS, for networking context.
 
 ### Changed
+- `.torrent` URLs are fetched only from public addresses. `torrentfile.fetch()` checks every resolved address and every redirect hop, and refuses loopback, private, link-local, CGNAT, ULA and multicast addresses. The MCP add tool and `03_lifecycle.py` then upload the file instead of handing qBittorrent the URL, so neither process can be pointed at DSM or the LAN from inside the NAS.
 - `find_torrents()`/`resolve_hash()`: an exact name now wins over substring matches, after an exact hash.
 - Verified Stages 2 and 3 on the real server (errata E11–E21). The fake now follows it:
   - `torrents/add` answers JSON, and `.torrent` URLs are pending.

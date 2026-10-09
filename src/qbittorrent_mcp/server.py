@@ -11,12 +11,18 @@ Safety model:
 
 The API key comes from the same .env as the PoC and never appears in tool output. Nothing may
 print to stdout: with the stdio transport, stdout is the protocol channel.
+
+Transports: stdio (default) or, with QBT_MCP_TRANSPORT=http, streamable HTTP for running in a
+container. Over HTTP every request needs `Authorization: Bearer $QBT_MCP_TOKEN`.
 """
 
 from __future__ import annotations
 
+import copy
 import functools
+import hmac
 import os
+import sys
 import threading
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -26,9 +32,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
+import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from qbittorrent_poc import (FILTERS, TORRENT_FIELDS, PolicyError, QbtClient, QbtError, Sandbox, Settings,
                              TorrentPolicy, WebUI, fields, fmt, samples, torrentfile)
@@ -393,12 +404,13 @@ def build_server(config: ServerConfig, session: QbtSession | None = None) -> MCP
         @tool(ADD)
         def qbt_add_torrent(source: str, category: str | None = None, tags: list[str] | None = None,
                             start: bool = False) -> dict[str, Any]:
-            """Add a torrent from a magnet link or an http(s) URL of a .torrent file, into the sandbox
-            (tagged and saved inside the sandbox path). Added stopped unless start=true. category
-            must already exist. Only add content that is legal to download."""
+            """Add a torrent from a magnet link or a public http(s) URL of a .torrent file, into the
+            sandbox (tagged and saved inside the sandbox path). Added stopped unless start=true.
+            category must already exist. URLs on private or internal addresses are refused. Only add
+            content that is legal to download."""
             a, b = api(), box()
             try:
-                h, name, _ = torrentfile.identify(source)
+                h, name, meta = torrentfile.identify(source)
             except TorrentFileError as e:
                 raise ValueError(str(e)) from e
             existing = a.list_torrents(hashes=[h])
@@ -407,7 +419,11 @@ def build_server(config: ServerConfig, session: QbtSession | None = None) -> MCP
                 raise ValueError(f"{existing[0]['name']} ({h[:8]}) is already in qBittorrent, {where}.")
             if category and category not in a.categories():
                 raise ValueError(f"Unknown category {category!r}; existing: {', '.join(sorted(a.categories())) or 'none'}.")
-            b.add([source], category=category, tags=tags or [], stopped=not start)
+            if meta is None:  # a magnet link
+                b.add([source], category=category, tags=tags or [], stopped=not start)
+            else:  # upload the file we fetched and checked; qBittorrent never fetches the URL itself
+                b.add(torrent_files=[(f"{h}.torrent", meta.raw)], category=category, tags=tags or [],
+                      stopped=not start)
             row = b.wait_settled(h, timeout=90)
             try:
                 policy.check_row(row)
@@ -534,9 +550,82 @@ def build_server(config: ServerConfig, session: QbtSession | None = None) -> MCP
     return server
 
 
+# -- HTTP transport (a container in Synology Container Manager) -------------------------------
+MIN_TOKEN_LENGTH = 32
+HEALTH_PATH = "/healthz"
+
+
+@dataclass(frozen=True)
+class HttpConfig:
+    token: str = field(repr=False)
+    host: str = "127.0.0.1"
+    port: int = 8000
+
+    @classmethod
+    def from_env(cls) -> HttpConfig:
+        token = os.getenv("QBT_MCP_TOKEN", "").strip()
+        if len(token) < MIN_TOKEN_LENGTH:
+            sys.exit(
+                f"QBT_MCP_TRANSPORT=http needs QBT_MCP_TOKEN with at least {MIN_TOKEN_LENGTH} "
+                "characters (e.g. `openssl rand -hex 32`)."
+            )
+        try:
+            port = int(os.getenv("QBT_MCP_PORT") or "8000")
+        except ValueError:
+            sys.exit(f"QBT_MCP_PORT must be a number, not {os.getenv('QBT_MCP_PORT')!r}")
+        return cls(token=token, host=os.getenv("QBT_MCP_HOST") or "127.0.0.1", port=port)
+
+
+class BearerTokenGuard:
+    """ASGI middleware: every HTTP request except the health check needs the shared token."""
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] != HEALTH_PATH:
+            given = dict(scope["headers"]).get(b"authorization", b"")
+            if not hmac.compare_digest(given, self.expected):
+                deny = JSONResponse({"error": "unauthorized"}, 401, headers={"WWW-Authenticate": "Bearer"})
+                await deny(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def http_app(server: MCPServer, config: HttpConfig) -> Starlette:
+    """The MCP endpoint at /mcp behind the token check, plus an open GET /healthz."""
+
+    @server.custom_route(HEALTH_PATH, methods=["GET"], include_in_schema=False)
+    async def health(request: Request) -> Response:
+        return PlainTextResponse("ok")
+
+    # Plain JSON responses instead of SSE streams: reverse proxies (DSM's nginx) buffer SSE.
+    app = server.streamable_http_app(host=config.host, json_response=True)
+    app.add_middleware(BearerTokenGuard, token=config.token)
+    return app
+
+
+def http_server(app: ASGIApp, config: HttpConfig) -> uvicorn.Server:
+    log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    log_config["handlers"]["access"]["stream"] = "ext://sys.stderr"  # keep stdout clean
+    return uvicorn.Server(uvicorn.Config(app, host=config.host, port=config.port, log_config=log_config))
+
+
+def transport_from_env() -> str:
+    transport = (os.getenv("QBT_MCP_TRANSPORT") or "stdio").strip().lower()
+    if transport not in ("stdio", "http"):
+        sys.exit(f"QBT_MCP_TRANSPORT must be 'stdio' or 'http', not {transport!r}")
+    return transport
+
+
 def main() -> None:
     config = ServerConfig.from_env()  # also loads .env
-    build_server(config).run("stdio")
+    if transport_from_env() == "stdio":
+        build_server(config).run("stdio")
+        return
+    http = HttpConfig.from_env()
+    http_server(http_app(build_server(config), http), http).run()
 
 
 if __name__ == "__main__":

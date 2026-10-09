@@ -234,6 +234,8 @@ what the library does.
 | E20 | `sync/torrentPeers` | Format "TODO" | `{rid, full_update, show_flags, peers: {"ip:port": {...}}}`; 17 peer fields including `host_name` (reverse DNS; empty here). `connection` is `μTP`, `BT` or `Web` (web seeds); `client` can be empty | `fields.PEER_FIELDS`; samples redact `ip`, `port`, `host_name` |
 | E21 | `torrents/trackers` | – | A trackerless torrent (web seeds + DHT) has only the DHT, PeX and LSD rows, all status 2 | – |
 
+| E22 | `torrents/add` | `torrents` file parts | Uploading the `.torrent` file answers `{added_torrent_ids: [hash], success_count: 1, pending_count: 0}` and the torrent shows `checkingResumeData` briefly, then the requested state (2026-10-09) | The MCP server and `03_lifecycle.py` fetch `.torrent` URLs themselves (public addresses only) and upload the bytes |
+
 Confirmed as documented: `torrents/files` fields, `torrents/trackers` fields, `log/main` fields and `last_known_id`, 404 for an unknown hash on `torrents/properties`, 409 for an unknown category, the `sync/maindata` delta (only changed `server_state` keys came back).
 
 Privacy: `log/main` holds the user's search-engine queries and failed sources. Examples mask IPs but show messages; samples drop them; never commit them.
