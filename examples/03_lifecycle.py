@@ -31,6 +31,8 @@ from qbittorrent_poc.webui import magnet_hash, split_tags
 
 ARCH = "https://fastly.mirror.pkgbuild.com/iso/2026.10.01/archlinux-2026.10.01-x86_64.iso.torrent"
 HELPER_TAG = "poc-extra"
+# States a torrent passes through right after torrents/add, before it settles (seen on 5.2.3).
+TRANSIENT = {"checkingResumeData", "allocating", "checkingDL", "checkingUP", "moving", "unknown"}
 
 
 def identify(url: str) -> tuple[str, str]:
@@ -107,26 +109,31 @@ def main() -> None:
             raise
 
 
-def run(api: WebUI, box: Sandbox, h: str, url: str, tag: str, root: str, args: argparse.Namespace) -> None:
-    def poll(row: dict | None) -> None:
-        print(f"      {show(row)}")
+def poll(row: dict | None) -> None:
+    print(f"      {show(row)}")
 
-    print(f"\n[1] Add stopped (torrents/add, stopped=true and paused=true), hash {h[:12]}…")
+
+def run(api: WebUI, box: Sandbox, h: str, url: str, tag: str, root: str, args: argparse.Namespace) -> None:
+    print(f"\n[1] Add stopped (torrents/add: stopped, autoTMM=false, useDownloadPath=false), hash {h[:12]}…")
     answer = box.add([url], savepath=root, stopped=True)
     print(f"    server answered: {answer!r}")
     # A URL add answers before qBittorrent has fetched the .torrent file; allow for that.
     row = box.wait_for(h, lambda r: r is not None, timeout=60)
-    honored = row["state"].startswith("stopped")
     print(f"    appeared: {show(row)}")
-    print(f"    tags {row['tags']!r}, save path {row['save_path']}, auto_tmm {row.get('auto_tmm')}")
+    if row["state"] in TRANSIENT:
+        row = box.wait_for(h, lambda r: r["state"] not in TRANSIENT, timeout=60, on_poll=poll)
+    honored = row["state"].startswith("stopped")
+    print(f"    settled : {show(row)}")
+    print(f"    tags {row['tags']!r}, save path {row['save_path']}, download path "
+          f"{row.get('download_path') or '-'}, auto_tmm {row.get('auto_tmm')}")
     try:
-        box.policy.check_path(row["save_path"])
-    except PolicyError:
-        print("    !! the server put it OUTSIDE the sandbox save path (note it in the errata).")
-        print("       Stopping it and moving it into the sandbox before going on.")
-        box.stop([h])
-        box.set_location([h], root)
-        box.wait_for(h, lambda r: r["save_path"].rstrip("/") == root, timeout=60)
+        box.policy.check_row(row)
+    except PolicyError as e:
+        print(f"    !! the server put it OUTSIDE the sandbox (note it in the errata): {e}")
+        print("       Deleting it before anything is downloaded.")
+        box.delete([h], delete_files=True)
+        box.wait_for(h, lambda r: r is None, timeout=30)
+        raise SystemExit(1) from e
     print(f"    stop-on-add: {'honored' if honored else 'IGNORED (note it in the errata); stopping now'}")
     if not honored:
         box.stop([h])
@@ -147,11 +154,11 @@ def run(api: WebUI, box: Sandbox, h: str, url: str, tag: str, root: str, args: a
     box.stop([h])
     row = box.wait_for(h, lambda r: r["state"].startswith("stopped"), timeout=30, on_poll=poll)
 
-    print("\n[4] Recheck (torrents/recheck)")
+    print("\n[4] Recheck (torrents/recheck), waiting for the check to finish")
     box.recheck([h])
-    time.sleep(2)
-    row = api.list_torrents(hashes=[h])[0]
-    print(f"    after 2s: {show(row)}")
+    time.sleep(1)
+    row = box.wait_for(h, lambda r: not r["state"].startswith("checking"), timeout=180, interval=2, on_poll=poll)
+    print(f"    checked: {fmt.size(row['completed'])} verified ({row['state']})")
     if not row["state"].startswith("stopped"):
         print("    recheck resumed it (note it in the errata); stopping it again")
         box.stop([h])

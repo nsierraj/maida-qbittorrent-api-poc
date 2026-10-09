@@ -118,10 +118,11 @@ def test_02_inspect_by_name(env, monkeypatch, capsys, tmp_path):
     assert "warning 1" in out and "critical 1" in out
     assert "entries after id 4: 0 (last_known_id works as documented)" in out
     # Reference sets match the fake, so nothing new is reported yet.
-    assert out.count("new: none") == 6
+    assert out.count("new: none") == 8
 
     # Safe to paste: no tracker paths, peer IPs, external IP or key.
     assert "/announce" not in out and "198.51.100." not in out and "203.0.113.7" not in out
+    assert "peers.example.net" not in out
     assert API_KEY not in out
     assert "https://tracker.example.org " in out
 
@@ -132,6 +133,7 @@ def test_02_inspect_by_name(env, monkeypatch, capsys, tmp_path):
         for t in env.torrents:
             assert t["name"] not in text and t["hash"] not in text
         assert "198.51.100." not in text and "203.0.113.7" not in text and "/announce" not in text
+        assert "peers.example.net" not in text
 
 
 def test_02_inspect_multi_file_and_stopped(env, monkeypatch, capsys):
@@ -157,7 +159,10 @@ def test_03_lifecycle(env, monkeypatch, capsys):
     run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
     assert "Test torrent: archlinux-2026.10.01-x86_64.iso, 1.5 GiB, 1 web seeds" in out
-    assert "server answered: 'Ok.'" in out
+    assert "server answered: {'added_torrent_ids': [], 'failure_count': 0, 'pending_count': 1" in out
+    assert "appeared: checkingResumeData" in out and "settled : stoppedDL" in out
+    assert "download path -," in out
+    assert "checkingDL" in out and "verified (stoppedDL)" in out
     assert "stop-on-add: honored" in out
     assert "GET torrents/stop -> HTTP 405 (method enforced)" in out
     assert "category created" in out and "unknown category -> HTTP 409" in out
@@ -215,13 +220,18 @@ def test_03_ignored_stop_on_add_is_reported_and_corrected(env, monkeypatch, caps
     assert "stop-on-add: IGNORED" in out and "All lifecycle steps passed." in out
 
 
-def test_03_moves_a_torrent_the_server_put_outside_the_sandbox(env, monkeypatch, capsys):
+@pytest.mark.parametrize("dropped", ["autoTMM", "useDownloadPath"])
+def test_03_deletes_a_torrent_the_server_put_outside_the_sandbox(env, monkeypatch, capsys, dropped):
+    # A server that ignores autoTMM=false (with auto-management on) or useDownloadPath=false
+    # (with the incomplete folder on) would put the data outside the sandbox.
     original = env._add
-    env.routes["torrents/add"] = ("POST", lambda p: original({k: v for k, v in p.items() if k != "autoTMM"}))
+    env.routes["torrents/add"] = ("POST", lambda p: original({k: v for k, v in p.items() if k != dropped}))
     env.preferences["auto_tmm_enabled"] = True
-    run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
+    with pytest.raises(SystemExit):
+        run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
-    assert "OUTSIDE the sandbox save path" in out and "All lifecycle steps passed." in out
+    assert "OUTSIDE the sandbox" in out and "Deleting it before anything is downloaded" in out
+    assert env.torrent(ARCH_HASH) is None and env.deleted_files == [ARCH_HASH]
 
 
 def test_03_recheck_that_resumes_is_stopped_again(env, monkeypatch, capsys):

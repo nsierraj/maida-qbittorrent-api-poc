@@ -16,8 +16,10 @@ It models the behavior observed on the real server (qBittorrent 5.2.3, WebAPI 2.
   Unknown hashes get 404. sync/maindata and sync/torrentPeers return deltas when given the rid
   of an earlier response, and everything when the rid is 0 or unknown.
 - Stage 3 writes are POST-only (GET gets 405). torrents/add reads `stopped` (5.x) or `paused`
-  (4.x), answers "Ok." or "Fails." (hash already present), and the torrent appears in
-  torrents/info at once; a magnet without metadata sits in metaDL/stoppedDL with size 0 until
+  (4.x) and answers JSON `{added_torrent_ids, success_count, pending_count, failure_count}` as
+  5.2.3 does (URL adds count as pending; `legacy_add_answer` switches to the wiki's "Ok."/"Fails.").
+  The torrent appears in torrents/info at once, shows `checkingResumeData` on the first read (as
+  observed), then its requested state; a magnet without metadata sits in metaDL/stoppedDL with size 0 until
   `fetch_metadata()` is called. URLs of .torrent files are fetched from `web` (the fake
   "internet", which also serves the examples' own downloads); an unknown URL still answers
   "Ok." and nothing appears, as a failed background download would. delete answers 200 even for unknown hashes. Unverified until
@@ -164,6 +166,8 @@ class FakeQbt:
             "bypass_auth_subnet_whitelist_enabled": False, "web_ui_max_auth_fail_count": 5,
             "web_ui_ban_duration": 3600, "web_ui_session_timeout": 3600, "use_https": False,
             "web_ui_reverse_proxy_enabled": False, "auto_tmm_enabled": False,
+            # "Keep incomplete torrents in", as on the real NAS.
+            "temp_path_enabled": True, "temp_path": "/data/torrents/incoming",
             # Secrets live here too; the library must never return them.
             "web_ui_password": "fake-password-hash", "proxy_password": "fake-proxy-secret",
         }
@@ -179,6 +183,8 @@ class FakeQbt:
         ]
         self.rechecked: list[str] = []
         self.recheck_resumes = False
+        self.add_settles_through: str | None = "checkingResumeData"  # observed on 5.2.3
+        self.legacy_add_answer = False  # True: the wiki's "Ok."/"Fails." text instead of 5.2.3's JSON
         self.deleted_files: list[str] = []
         self.web: dict[str, bytes] = {ARCH_URL: ARCH_TORRENT}  # non-API URLs (the "internet")  # hashes deleted with deleteFiles=true
         self._rid = 0
@@ -293,7 +299,18 @@ class FakeQbt:
             "errored": s in ERRORED,
         }[flt]
 
+    def _settle(self) -> None:
+        """A just-added torrent shows its transient state once, then the requested one."""
+        for t in self.torrents:
+            if "_settle" in t:
+                if t.get("_seen"):
+                    t["state"] = t.pop("_settle")
+                    t.pop("_seen")
+                else:
+                    t["_seen"] = True
+
     def _torrents_info(self, p: dict[str, Any]) -> requests.Response:
+        self._settle()
         flt = p.get("filter", "all")
         items = [t for t in self.torrents if self._matches(t, flt)] if flt in (
             "all", "downloading", "seeding", "completed", "stopped", "running", "active", "inactive",
@@ -315,7 +332,7 @@ class FakeQbt:
         items = items[offset:]
         if "limit" in p and int(p["limit"]) > 0:
             items = items[: int(p["limit"])]
-        return _response(200, items)
+        return _response(200, [{k: v for k, v in t.items() if not k.startswith("_")} for t in items])
 
     # -- Stage 2: per-torrent detail ------------------------------------------------------
     def torrent(self, torrent_hash: str) -> dict[str, Any] | None:
@@ -344,7 +361,10 @@ class FakeQbt:
             "peers_total": t["num_incomplete"], "pieces_have": t["pieces_have"], "pieces_num": t["pieces_num"],
             "reannounce": t["reannounce"], "seeds": t["num_seeds"], "seeds_total": t["num_complete"],
             "total_size": t["total_size"], "up_speed_avg": t["upspeed"], "up_speed": t["upspeed"],
-            "isPrivate": t["private"],
+            "private": t["private"], "is_private": t["private"], "hash": t["hash"], "name": t["name"],
+            "infohash_v1": t["infohash_v1"], "infohash_v2": t["infohash_v2"], "progress": t["progress"],
+            "availability": t["availability"], "popularity": t["popularity"],
+            "has_metadata": t["has_metadata"], "download_path": t["download_path"],
         }
 
     @staticmethod
@@ -369,7 +389,7 @@ class FakeQbt:
 
     @staticmethod
     def _trackers(t: dict[str, Any], p: dict[str, Any]) -> list[dict[str, Any]]:
-        pseudo = [{"url": f"** [{name}] **", "status": 2 if name != "LSD" else 0, "tier": -1,
+        pseudo = [{"url": f"** [{name}] **", "status": 2, "tier": -1,
                    "num_peers": 0, "num_seeds": 0, "num_leeches": 0, "num_downloaded": 0, "msg": ""}
                   for name in ("DHT", "PeX", "LSD")]
         real = [
@@ -389,12 +409,13 @@ class FakeQbt:
                 "client": "qBittorrent/5.1.2", "connection": "BT", "country": "Netherlands",
                 "country_code": "nl", "dl_speed": t["dlspeed"], "downloaded": 1_000_000, "files": "",
                 "flags": "D X E P", "flags_desc": "D = Currently downloading", "ip": f"198.51.100.{n}",
+                "host_name": f"host-{n}.peers.example.net",
                 "peer_id_client": "-qB5120-", "port": 51413, "progress": 1.0, "relevance": 1.0,
                 "up_speed": t["upspeed"], "uploaded": 20_000},
             f"198.51.100.{n + 100}:6881": {
                 "client": "Transmission 4.0.6", "connection": "μTP", "country": "Canada",
                 "country_code": "ca", "dl_speed": 0, "downloaded": 0, "files": "", "flags": "u I",
-                "flags_desc": "u = Peer wants data", "ip": f"198.51.100.{n + 100}",
+                "flags_desc": "u = Peer wants data", "ip": f"198.51.100.{n + 100}", "host_name": "",
                 "peer_id_client": "-TR4060-", "port": 6881, "progress": 0.3, "relevance": 0.0,
                 "up_speed": 0, "uploaded": 0},
         }
@@ -427,12 +448,14 @@ class FakeQbt:
             queueing=False, read_cache_hits="0", read_cache_overload="0", refresh_interval=1500,
             total_buffers_size=0, total_peer_connections=sum(len(self._peer_rows(t)) for t in self.torrents),
             total_queued_size=0, total_wasted_session=0, use_alt_speed_limits=self.alt_speed,
-            use_subcategories=False, write_cache_overload="0",
+            write_cache_overload="0",
         )
         return info
 
     def _sync_state(self) -> dict[str, Any]:
-        return {"torrents": {t["hash"]: {k: v for k, v in t.items() if k != "hash"} for t in self.torrents},
+        flags = {"has_tracker_error": False, "has_tracker_warning": False, "has_other_announce_error": False}
+        return {"torrents": {t["hash"]: {**{k: v for k, v in t.items() if k != "hash" and not k.startswith("_")},
+                                         **flags} for t in self.torrents},
                 "categories": copy.deepcopy(self.categories), "tags": list(self.tags),
                 "server_state": self.server_state()}
 
@@ -487,6 +510,9 @@ class FakeQbt:
             targets = self.torrents if wanted == "all" else [
                 t for t in self.torrents if t["hash"] in wanted.lower().split("|")]
             for t in targets:
+                if "_settle" in t:  # a command during the transient check applies to the real state
+                    t["state"] = t.pop("_settle")
+                    t.pop("_seen", None)
                 handler(t, p)
             return _response(200, "")
         return wrapped
@@ -501,7 +527,7 @@ class FakeQbt:
         # Automatic Torrent Management: when on (the request's autoTMM, else the server default),
         # savepath is ignored and the category's or the default save path is used.
         tmm = _truthy(p["autoTMM"]) if "autoTMM" in p else self.preferences.get("auto_tmm_enabled", False)
-        added = 0
+        added, pending, failed, ids = 0, 0, 0, []
         for url in urls:
             size, has_meta = 0, False
             if url.startswith("magnet:"):
@@ -509,12 +535,14 @@ class FakeQbt:
                 name = next((part[3:] for part in url.split("&") if part.startswith("dn=")), h)
             else:  # qBittorrent fetches the .torrent itself, after answering
                 data = self.web.get(url)
+                pending += 1  # 5.2.3 reports URL adds as pending: it fetches the file afterwards
                 if data is None:
-                    added += 1  # "Ok." now; the download fails later and nothing appears
-                    continue
+                    continue  # the background download fails and nothing appears
                 meta = torrentfile.parse(data)
                 h, name, size, has_meta = meta.info_hash, meta.name, meta.size or 0, True
             if self.torrent(h):
+                if url.startswith("magnet:"):
+                    failed += 1
                 continue
             cat = p.get("category", "")
             if cat and cat not in self.categories:
@@ -524,16 +552,30 @@ class FakeQbt:
                     self.tags.append(tag)
             t = make_torrent(name, "stoppedDL" if stopped else "metaDL", n=0, size=0, progress=0.0,
                              category=cat, tags=", ".join(sorted(x for x in p.get("tags", "").split(",") if x)))
-            t.update(hash=h, infohash_v1=h, magnet_uri=url if url.startswith("magnet:") else f"magnet:?xt=urn:btih:{h}",
+            if "useDownloadPath" in p:
+                use_dl = _truthy(p["useDownloadPath"])
+            else:
+                use_dl = self.preferences["temp_path_enabled"]
+            dl_path = (p.get("downloadPath") or self.preferences["temp_path"]) if use_dl else ""
+            t.update(hash=h, infohash_v1=h, download_path=dl_path, magnet_uri=url if url.startswith("magnet:") else f"magnet:?xt=urn:btih:{h}",
                      has_metadata=has_meta, size=size, total_size=size, amount_left=size,
                      pieces_num=-(-size // t["piece_size"]) if size else 0, pieces_have=0,
                      save_path=("/data/torrents/completed" if tmm else p.get("savepath"))
-                     or "/data/torrents/completed", content_path="", auto_tmm=tmm,
+                     or "/data/torrents/completed", auto_tmm=tmm,
                      added_on=1_790_100_000 + len(self.torrents), completion_on=-1, priority=len(self.torrents))
             t["name"] = p.get("rename") or name
+            t["content_path"] = f"{t['download_path'] or t['save_path']}/{name}"
+            if self.add_settles_through:  # e.g. checkingResumeData before the requested state
+                t["_settle"] = t["state"]
+                t["state"] = self.add_settles_through
             self.torrents.append(t)
-            added += 1
-        return _response(200, "Ok." if added else "Fails.")
+            if url.startswith("magnet:"):
+                added += 1
+                ids.append(h)
+        if self.legacy_add_answer:
+            return _response(200, "Ok." if added or pending else "Fails.")
+        return _response(200, {"added_torrent_ids": ids, "failure_count": failed,
+                               "pending_count": pending, "success_count": added})
 
     def fetch_metadata(self, torrent_hash: str, size: int = 3_200_000_000) -> None:
         """Simulate the swarm delivering the metadata of an added magnet."""
@@ -557,9 +599,14 @@ class FakeQbt:
                 t["state"] = "downloading" if t["has_metadata"] else "metaDL"
 
     def _recheck(self, t: dict[str, Any], p: dict[str, Any]) -> None:
+        """Observed on 5.2.3: checkingDL for a while, then back to the previous state."""
         self.rechecked.append(t["hash"])
-        if self.recheck_resumes and t["state"].startswith("stopped"):  # older qBittorrent behavior
+        after = t["state"]
+        if self.recheck_resumes and after.startswith("stopped"):  # older qBittorrent behavior
             self._start(t, p)
+            after = t["state"]
+        t["_settle"] = after
+        t["state"] = "checkingUP" if t["progress"] >= 1 else "checkingDL"
 
     def _set_category(self, p: dict[str, Any]) -> requests.Response:
         cat = p.get("category", "")

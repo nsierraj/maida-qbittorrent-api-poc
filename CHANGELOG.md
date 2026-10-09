@@ -27,11 +27,20 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 - `docs/qbittorrent/reference-compose.yml`: redacted copy of the qBittorrent + gluetun compose project on the NAS, for networking context.
 
 ### Changed
+- Verified Stages 2 and 3 on the real server (errata E11–E21). The fake now follows it:
+  - `torrents/add` answers JSON, and `.torrent` URLs are pending.
+  - New torrents pass through `checkingResumeData`, and a recheck goes through `checkingDL`.
+  - `torrents/properties` has 44 fields, the `server_state` 26 keys, and sync rows three tracker flags.
+  - Peers have 17 fields, including `host_name`.
+- `fields.PROPERTIES_FIELDS`, `SERVER_STATE_FIELDS`, `PEER_FIELDS` and the new `MAINDATA_TORRENT_FIELDS` are the real 5.2.3 sets. `02_inspect.py` also compares `torrents/info` and sync rows.
+- `03_lifecycle.py` waits for a new torrent's state to settle before judging stop-on-add, and waits for a recheck to finish.
 - `examples/02_inspect.py` and the README no longer call the console output "safe to paste": tracker passkeys and IPs are hidden, but torrent names, file names and log messages are shown.
 - Verified Stage 1 against the real server (qBittorrent 5.2.3, WebAPI 2.15.1). Findings are in `docs/qbittorrent/webui-api.md` §8 (errata E1–E10): API keys skip the Referer/Origin check, a container name in `Host` is accepted, GET endpoints accept POST, and `torrents/info` sends 66 fields including `private` instead of `isPrivate`.
 - `TORRENT_FIELDS` is now the real 5.2.3 field list; `tests/fake_qbt.py` follows the observed behavior, field set, defaults and category shape.
 - `examples/00_probe_auth.py` describes the observed results more precisely.
 
 ### Fixed
+- Sandbox data could land outside the sandbox. With "keep incomplete torrents in" enabled on the server, incomplete data went to its folder, not `savepath`. `Sandbox.add()` now sends `useDownloadPath=false`, and `TorrentPolicy.check_row()` checks both `save_path` and `download_path`. `03_lifecycle.py` deletes a torrent the server put outside the sandbox before downloading anything.
+- Samples now also redact peers' `host_name`.
 - `examples/01_discover.py` wrote its samples to `samples/` in the current folder, not to `out/`, when `.env` had an empty `QBT_POC_OUT=` (as `.env.example` does). An empty value now means `out`.
 - `examples/01_discover.py` saved the server's external address (`last_external_address_v4`/`_v6`, the VPN exit IP) unredacted in `transfer_info.json`.

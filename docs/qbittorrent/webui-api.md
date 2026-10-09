@@ -217,3 +217,23 @@ what the library does.
 | E8 | `transfer/info` | 8 fields | Also `last_external_address_v4` / `_v6`, the public (VPN exit) address | Shown on screen, redacted in samples |
 | E9 | `torrents/categories` | `{name, savePath}` | Also `download_path` (null), `ratio_limit`, `seeding_time_limit`, `inactive_seeding_time_limit` (−2 = global), `share_limit_action` (`Default`); `savePath` `""` = default save path | Fake uses the real shape |
 | E10 | `app/buildInfo` | `qt`, `libtorrent`, `boost`, `openssl`, `bitness` | Also `platform`, `zlib` | – |
+
+### Stages 2 and 3 (2026-10-09, `examples/02_inspect.py` and `03_lifecycle.py`, sandbox torrent: Arch Linux 2026.10.01 ISO)
+
+| # | Endpoint | Wiki says | Real server | What the code does |
+| --- | --- | --- | --- | --- |
+| E11 | `torrents/add` | Answers `Ok.` / `Fails.` | Answers JSON `{added_torrent_ids, success_count, pending_count, failure_count}`. A `.torrent` URL counts as pending (`added_torrent_ids: []`): the server fetches the file afterwards | `add()` accepts both, raises when nothing was added; callers compute the hash first (`torrentfile`) |
+| E12 | `torrents/add` | `paused` | `stopped=true` is honored. A new torrent can show `checkingResumeData` on the first read before settling | Sends `stopped` and `paused`; the example waits for the state to settle |
+| E13 | POST-only endpoints | Wrong method gets 405 | GET on `torrents/stop` gets **405**. Closes E4: POST-only endpoints refuse GET, GET endpoints accept POST | – |
+| E14 | `torrents/start` / `stop` | – | Start goes through `stalledDL` or `queuedDL` to `downloading`; after a stop, one more read can still say `downloading` at 0 B/s | `Sandbox.wait_for()` |
+| E15 | `torrents/recheck` | – | A stopped torrent goes to `checkingDL` and back to `stoppedDL`; it isn't resumed. While checking, `progress` is the check's progress, and stopping mid-check leaves that number (79% shown, 1% real). `completed` and `pieces_have` are the truth | The example waits for the check to finish |
+| E16 | `torrents/add` | `savepath` decides where data goes | With "keep incomplete torrents in" on (`temp_path_enabled`, here `/data/torrents/incoming`), incomplete data goes to `download_path`, ignoring `savepath` | `Sandbox.add()` sends `useDownloadPath=false` and `autoTMM=false`; `TorrentPolicy.check_row()` checks `save_path` and `download_path` |
+| E17 | `torrents/properties` | 34 fields with `isPrivate` | 44 fields: no `isPrivate`; adds `private` **and** `is_private`, `hash`, `name`, `progress`, `availability`, `popularity`, `has_metadata`, `download_path`, `infohash_v1`, `infohash_v2` | `fields.PROPERTIES_FIELDS` is the real list |
+| E18 | `sync/maindata` `server_state` | (undocumented) | 26 keys; no `use_subcategories` | `fields.SERVER_STATE_FIELDS` |
+| E19 | `sync/maindata` torrents | (undocumented) | Rows keyed by hash (no `hash` field) and three fields `torrents/info` doesn't send: `has_tracker_error`, `has_tracker_warning`, `has_other_announce_error` | `fields.MAINDATA_TORRENT_FIELDS` |
+| E20 | `sync/torrentPeers` | Format "TODO" | `{rid, full_update, show_flags, peers: {"ip:port": {...}}}`; 17 peer fields including `host_name` (reverse DNS; empty here). `connection` is `μTP`, `BT` or `Web` (web seeds); `client` can be empty | `fields.PEER_FIELDS`; samples redact `ip`, `port`, `host_name` |
+| E21 | `torrents/trackers` | – | A trackerless torrent (web seeds + DHT) has only the DHT, PeX and LSD rows, all status 2 | – |
+
+Confirmed as documented: `torrents/files` fields, `torrents/trackers` fields, `log/main` fields and `last_known_id`, 404 for an unknown hash on `torrents/properties`, 409 for an unknown category, the `sync/maindata` delta (only changed `server_state` keys came back).
+
+Privacy: `log/main` holds the user's search-engine queries and failed sources. Examples mask IPs but show messages; samples drop them; never commit them.

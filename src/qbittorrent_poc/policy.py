@@ -3,7 +3,8 @@
 The NAS runs real torrents, so every change is confined to a sandbox:
 - Torrents: only ones carrying the sandbox tag (default `poc`). New torrents always get it,
   and the tag can't be removed through the sandbox, so nothing can leave it.
-- Paths: save paths and moves stay inside the sandbox save path (a container path).
+- Paths: save paths, moves and the incomplete-downloads path stay inside the sandbox save path
+  (a container path). check_row() verifies where the server actually put a torrent.
 - Capabilities: writes and deletes are separate opt-ins.
 
 Checks run locally before any request; a PolicyError means nothing was sent.
@@ -87,3 +88,15 @@ class TorrentPolicy:
         if norm == self.sandbox_path or norm.startswith(self.sandbox_path + "/"):
             return norm
         raise PolicyError(f"{path!r} is outside the sandbox save path {self.sandbox_path}.")
+
+    def check_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Verify where the server actually keeps a torrent's data: its save path and, when the
+        "keep incomplete torrents in" folder applies, its download path."""
+        self.check_path(row["save_path"])
+        if row.get("download_path"):
+            try:
+                self.check_path(row["download_path"])
+            except PolicyError as e:
+                raise PolicyError(f"Incomplete data goes to {row['download_path']!r}, outside the sandbox "
+                                  f"save path {self.sandbox_path}.") from e
+        return row

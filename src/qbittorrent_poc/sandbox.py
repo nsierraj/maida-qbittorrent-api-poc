@@ -45,6 +45,9 @@ class Sandbox:
         self.policy.require_writes()
         path = self.policy.check_path(savepath or self.policy.sandbox_path or "")
         all_tags = [self.policy.sandbox_tag, *[t for t in tags if t != self.policy.sandbox_tag]]
+        # Never auto-managed (it would ignore savepath) and no separate incomplete-downloads folder
+        # (the server's may be outside the sandbox): data goes straight to the sandbox path.
+        kwargs.update(auto_tmm=False, use_download_path=False, download_path=None)
         return self.api.add(urls, savepath=path, category=category, tags=all_tags, stopped=stopped, **kwargs)
 
     def stop(self, hashes: str | Iterable[str]) -> None:

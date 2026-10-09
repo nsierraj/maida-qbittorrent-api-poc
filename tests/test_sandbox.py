@@ -16,8 +16,11 @@ def writes_sent(qbt):
 
 def test_add_always_tags_and_stays_in_the_sandbox(box, api, qbt):
     box.add([MAGNET], tags=["extra"])
+    data = qbt.requests[-1][2]
+    assert (data["autoTMM"], data["useDownloadPath"]) == ("false", "false")
     row = api.list_torrents(hashes=[H])[0]
     assert row["tags"] == "extra, poc" and row["save_path"] == "/data/torrents/poc"
+    assert box.policy.check_row(row) is row
     with pytest.raises(PolicyError):
         box.add([MAGNET], savepath="/data/torrents/completed")
 

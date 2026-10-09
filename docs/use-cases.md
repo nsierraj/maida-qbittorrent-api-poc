@@ -13,17 +13,17 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 | UC-02 | Global transfer state | `transfer_info()`, `alt_speed_limits_enabled()`, `default_save_path()` | 01 | – | read | 2026-10-09 |
 | UC-03 | List and filter torrents | `list_torrents()` | 01 | – | read | 2026-10-09 |
 | UC-04 | Categories and tags | `categories()`, `tags()` | 01 | – | read | 2026-10-09 |
-| UC-05 | Find a torrent by name or hash prefix | `find_torrents()`, `resolve_hash()` | 02 | – | read | pending |
-| UC-06 | Torrent details: properties, files, trackers | `properties()`, `files()`, `trackers()`, `webseeds()` | 02 | – | read | pending |
-| UC-07 | Peers of a torrent | `peers()` | 02 | – | read | pending |
-| UC-08 | Incremental sync ("what changed?") | `maindata()` | 02 | – | read | pending |
-| UC-09 | Application log | `main_log()` | 02 | – | read | pending |
-| UC-10 | Add a torrent (magnet/URL) | `Sandbox.add()` → `add()` | 03 | – | write | pending |
-| UC-11 | Stop, start, recheck, reannounce | `Sandbox.stop/start/recheck/reannounce()` | 03 | – | write | pending |
-| UC-12 | Categories | `Sandbox.ensure_category/set_category()` | 03 | – | write | pending |
-| UC-13 | Tags | `Sandbox.add_tags/remove_tags()` | 03 | – | write | pending |
-| UC-14 | Rename and move | `Sandbox.rename/set_location()` | 03 | – | write | pending |
-| UC-15 | Delete (optionally with data) | `Sandbox.delete/cleanup()` | 03 | – | destructive | pending |
+| UC-05 | Find a torrent by name or hash prefix | `find_torrents()`, `resolve_hash()` | 02 | – | read | 2026-10-09 |
+| UC-06 | Torrent details: properties, files, trackers | `properties()`, `files()`, `trackers()`, `webseeds()` | 02 | – | read | 2026-10-09 |
+| UC-07 | Peers of a torrent | `peers()` | 02 | – | read | 2026-10-09 |
+| UC-08 | Incremental sync ("what changed?") | `maindata()` | 02 | – | read | 2026-10-09 |
+| UC-09 | Application log | `main_log()` | 02 | – | read | 2026-10-09 |
+| UC-10 | Add a torrent (magnet/URL) | `Sandbox.add()` → `add()` | 03 | – | write | 2026-10-09 |
+| UC-11 | Stop, start, recheck, reannounce | `Sandbox.stop/start/recheck/reannounce()` | 03 | – | write | 2026-10-09 |
+| UC-12 | Categories | `Sandbox.ensure_category/set_category()` | 03 | – | write | 2026-10-09 |
+| UC-13 | Tags | `Sandbox.add_tags/remove_tags()` | 03 | – | write | 2026-10-09 |
+| UC-14 | Rename and move | `Sandbox.rename/set_location()` | 03 | – | write | 2026-10-09 |
+| UC-15 | Delete (optionally with data) | `Sandbox.delete/cleanup()` | 03 | – | destructive | 2026-10-09 |
 
 ---
 
@@ -83,7 +83,7 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 
 ## UC-07: Peers of a torrent
 
-- **Call:** `GET sync/torrentPeers?hash=&rid=`. The wiki leaves the format as TODO; the reference set is from qBittorrent's source.
+- **Call:** `GET sync/torrentPeers?hash=&rid=`. The wiki leaves the format as TODO; `fields.PEER_FIELDS` is the real 5.2.3 set (E20), including `host_name` (reverse DNS, identifying: redact like the IP).
 - **Shape:** `{rid, full_update, show_flags, peers: {"ip:port": {client, country_code, dl_speed, up_speed, progress, flags, …}}}`. A stopped torrent has no peers.
 - **Delta:** passing the previous `rid` returns only changed fields per peer and `peers_removed`.
 
@@ -92,19 +92,22 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 - **Call:** `GET sync/maindata?rid=`. `rid=0` (or an unknown rid) returns everything with `full_update: true`: `torrents` keyed by hash (rows without `hash`), `categories`, `tags`, `server_state`.
 - **Delta:** with the `rid` from the previous answer, the server returns only what changed: partial torrent rows, `torrents_removed`, new `tags`/`tags_removed`, changed `categories`/`categories_removed`, and changed `server_state` keys. Nothing changed means `{rid}` alone.
 - **Why it matters:** one call answers "what changed since I last looked?", which the MCP server can use instead of re-listing everything.
-- **`server_state`** extends `transfer/info` with all-time totals, `free_space_on_disk`, `global_ratio`, peer connections and queue/cache stats.
+- **Rows** are keyed by hash and carry three tracker-health flags `torrents/info` doesn't (E19).
+- **`server_state`** (26 keys, E18) extends `transfer/info` with all-time totals, `free_space_on_disk`, `global_ratio`, peer connections and queue/cache stats.
 
 ## UC-09: Application log
 
 - **Call:** `GET log/main?normal=&info=&warning=&critical=&last_known_id=`. Entries `{id, message, timestamp, type}`, oldest first; type 1 normal, 2 info, 4 warning, 8 critical (`fields.LOG_TYPES`).
 - **Paging:** `last_known_id` returns only newer entries, so a poller keeps the last id it saw.
-- **Privacy:** messages can contain IPs (e.g. "Detected external IP") and paths. Mask IPs before showing them; samples drop messages entirely.
+- **Privacy:** messages can contain IPs, paths and the user's search-engine queries. Mask IPs before showing them; samples drop messages entirely.
 
 ## UC-10: Add a torrent
 
 - **Call:** `POST torrents/add` (multipart): `urls` (newline-separated magnet/http links), `savepath`, `category`, `tags` (comma-separated), `stopped`, `rename`, `sequentialDownload`, `skip_checking`.
 - **Stopped on add:** 5.x renamed `paused` to `stopped`; the library sends both. `03_lifecycle.py` reports whether the new torrent arrived stopped, and stops it at once if not.
-- **Answer:** `Ok.` per the wiki, `Fails.` when nothing was added (for example, the hash is already present), which `add()` turns into `QbtError` 409. A JSON summary is also accepted, in case 5.2 answers that way.
+- **Answer (E11):** 5.2.3 answers JSON `{added_torrent_ids, success_count, pending_count, failure_count}`; a `.torrent` URL is `pending` because the server fetches it afterwards. Older servers answer `Ok.`/`Fails.`. `add()` raises `QbtError` 409 when nothing was added.
+- **Settling (E12):** a new torrent may show `checkingResumeData` first; wait for it to settle before judging its state.
+- **Incomplete-downloads folder (E16):** with "keep incomplete torrents in" on, data goes to `download_path` whatever `savepath` says. `Sandbox.add()` sends `useDownloadPath=false`, and `TorrentPolicy.check_row()` verifies both paths after adding.
 - **Knowing the hash first:** `torrents/add` answers before the torrent exists, and for a URL before qBittorrent has even fetched the `.torrent` file. The sandbox needs the hash up front (to refuse a torrent already present outside it, then to find the new one), so: for a magnet it comes from the link (`magnet_hash()`, hex or base32); for a `.torrent` URL, `03_lifecycle.py` fetches the file itself and hashes the info dictionary (`torrentfile.parse()`: SHA-1, or truncated SHA-256 for v2-only). qBittorrent then fetches the URL again to add it.
 - **Magnets:** until metadata arrives the torrent has `has_metadata: false`, size 0 and state `metaDL` (running) or `stoppedDL`.
 - **Automatic Torrent Management:** with it on (per request or the server's `auto_tmm_enabled`), qBittorrent ignores `savepath`. `add()` always sends `autoTMM=false`, and `03_lifecycle.py` checks where the torrent actually landed.
@@ -113,8 +116,9 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 ## UC-11: Stop, start, recheck, reannounce
 
 - **Calls:** `POST torrents/stop|start|recheck|reannounce` with `hashes`. 200 even for unknown hashes, so the sandbox checks existence first.
-- **Recheck:** some versions resume a stopped torrent after a recheck; `03_lifecycle.py` stops it again and reports it.
-- **Method:** POST-only per the wiki; `03_lifecycle.py` sends one GET to `torrents/stop` (on the sandbox torrent) to record whether 405 is enforced.
+- **Recheck (E15):** a stopped torrent goes `checkingDL` → `stoppedDL` on 5.2.3 (not resumed). While checking, `progress` is the check's progress; use `completed`/`pieces_have`. Some older versions resumed after a recheck; the example stops it again if so.
+- **Start/stop (E14):** start passes through `stalledDL`/`queuedDL`; stop takes a moment.
+- **Method (E13):** POST-only, enforced: GET gets 405.
 
 ## UC-12: Categories
 
