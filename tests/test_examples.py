@@ -9,7 +9,7 @@ import pytest
 
 from qbittorrent_poc import config
 
-from .fake_qbt import API_KEY, HOST, PORT
+from .fake_qbt import API_KEY, ARCH_HASH, ARCH_SIZE, HOST, PORT
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
@@ -20,7 +20,7 @@ def env(qbt, monkeypatch, tmp_path):
     for key, value in {
         "QBT_HOST": HOST, "QBT_PORT": str(PORT), "QBT_API_KEY": API_KEY,
         "QBT_SANDBOX_TAG": "poc", "QBT_SANDBOX_SAVEPATH": "/data/torrents/poc",
-        "QBT_POC_OUT": str(tmp_path / "out"), "QBT_TEST_MAGNET": "",
+        "QBT_POC_OUT": str(tmp_path / "out"), "QBT_TEST_TORRENT": "",
     }.items():
         monkeypatch.setenv(key, value)
     return qbt
@@ -149,26 +149,27 @@ def test_02_inspect_ambiguous_query_exits(env, monkeypatch):
         run("02_inspect.py", "iso", monkeypatch=monkeypatch)
 
 
-LUBUNTU_HASH = "e3fbc63821098e11d5be6230b737765980ac354d"
+LUBUNTU = "magnet:?xt=urn:btih:e3fbc63821098e11d5be6230b737765980ac354d&dn=lubuntu-26.04-desktop-amd64.iso"
 
 
 def test_03_lifecycle(env, monkeypatch, capsys):
     before = {t["hash"]: dict(t) for t in env.torrents}
     run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
+    assert "Test torrent: archlinux-2026.10.01-x86_64.iso, 1.5 GiB, 1 web seeds" in out
     assert "server answered: 'Ok.'" in out
     assert "stop-on-add: honored" in out
     assert "GET torrents/stop -> HTTP 405 (method enforced)" in out
     assert "category created" in out and "unknown category -> HTTP 409" in out
     assert "after add   : 'poc, poc-extra'" in out and "after remove: 'poc'" in out
     assert out.count("refused locally") == 3 and "move outside the sandbox refused locally" in out
-    assert "name now 'poc-renamed-lubuntu'" in out
+    assert "name now 'poc-renamed-test'" in out
     assert "save path now /data/torrents/poc/moved" in out
     assert "removed tags ['poc-extra'], categories ['poc']" in out
     assert "All lifecycle steps passed." in out
     # Nothing outside the sandbox changed, and nothing was left behind.
     assert {t["hash"]: t for t in env.torrents} == before
-    assert env.deleted_files == [LUBUNTU_HASH]
+    assert env.deleted_files == [ARCH_HASH]
     assert "poc" not in env.categories and "poc-extra" not in env.tags
     assert API_KEY not in out
 
@@ -176,7 +177,7 @@ def test_03_lifecycle(env, monkeypatch, capsys):
 def test_03_lifecycle_keep_then_cleanup(env, monkeypatch, capsys):
     run("03_lifecycle.py", "--keep", "--run-seconds", "0", monkeypatch=monkeypatch)
     assert "--keep: left" in capsys.readouterr().out
-    kept = env.torrent(LUBUNTU_HASH)
+    kept = env.torrent(ARCH_HASH)
     assert kept["state"] == "stoppedDL" and kept["save_path"] == "/data/torrents/poc/moved"
 
     with pytest.raises(SystemExit, match="--cleanup first"):
@@ -185,11 +186,11 @@ def test_03_lifecycle_keep_then_cleanup(env, monkeypatch, capsys):
     run("03_lifecycle.py", "--cleanup", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
     assert "Removed 1 sandbox torrent(s)" in out
-    assert env.torrent(LUBUNTU_HASH) is None and "poc" not in env.categories
+    assert env.torrent(ARCH_HASH) is None and "poc" not in env.categories
 
 
 def test_03_refuses_a_magnet_already_outside_the_sandbox(env, monkeypatch, qbt):
-    monkeypatch.setenv("QBT_TEST_MAGNET", env.torrents[0]["magnet_uri"])
+    monkeypatch.setenv("QBT_TEST_TORRENT", env.torrents[0]["magnet_uri"])
     with pytest.raises(SystemExit, match="without the 'poc' tag"):
         run("03_lifecycle.py", monkeypatch=monkeypatch)
     assert not [e for m, e, _ in env.requests if m == "POST"]
@@ -228,3 +229,26 @@ def test_03_recheck_that_resumes_is_stopped_again(env, monkeypatch, capsys):
     run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
     assert "recheck resumed it" in out and "All lifecycle steps passed." in out
+
+
+def test_03_with_a_magnet(env, monkeypatch, capsys):
+    monkeypatch.setenv("QBT_TEST_TORRENT", LUBUNTU)
+    run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "no metadata yet" in out and "All lifecycle steps passed." in out
+    assert "Test torrent:" not in out  # nothing to download for a magnet
+
+
+def test_03_torrent_url_downloads_metadata(env, monkeypatch, capsys):
+    run("03_lifecycle.py", "--keep", "--run-seconds", "0", monkeypatch=monkeypatch)
+    kept = env.torrent(ARCH_HASH)
+    assert kept["has_metadata"] and kept["size"] == ARCH_SIZE
+
+
+def test_03_unreadable_torrent_url(env, monkeypatch):
+    monkeypatch.setenv("QBT_TEST_TORRENT", "https://example.org/missing.torrent")
+    with pytest.raises(SystemExit, match="Couldn't read the test torrent"):
+        run("03_lifecycle.py", monkeypatch=monkeypatch)
+    monkeypatch.setenv("QBT_TEST_TORRENT", "ftp://example.org/x.torrent")
+    with pytest.raises(SystemExit, match="magnet link or an http"):
+        run("03_lifecycle.py", monkeypatch=monkeypatch)

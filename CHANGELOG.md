@@ -6,9 +6,10 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 ## [Unreleased]
 
 ### Added
+- `qbittorrent_poc.torrentfile`: reads a `.torrent` file's info hash (SHA-1 of the info dictionary; truncated SHA-256 for v2-only), name, size and web seeds, so a torrent added by URL can be identified before it appears. Verified against the hash Arch Linux publishes for 2026.10.01.
 - Stage 3, changes inside a sandbox: raw `WebUI` writes (`add`, `stop`, `start`, `recheck`, `reannounce`, categories, tags, `rename`, `set_location`, `delete`) and `magnet_hash()`.
 - `TorrentPolicy` and `Sandbox`: every change is refused locally unless the torrents carry the sandbox tag and paths stay inside the sandbox save path; writes and deletes are separate opt-ins; `add` always applies the tag; `wait_for()` and `cleanup()`. `add()` always sends `autoTMM=false`, because Automatic Torrent Management would otherwise ignore the save path.
-- `examples/03_lifecycle.py`: add a legal test torrent stopped (default the Lubuntu 26.04 ISO, `QBT_TEST_MAGNET`), start briefly, stop, recheck, categorize, tag, rename, move, show a refused change outside the sandbox, delete with files. `--keep` and `--cleanup`.
+- `examples/03_lifecycle.py`: add a legal test torrent stopped (`QBT_TEST_TORRENT`, a `.torrent` URL or a magnet link; default the Arch Linux 2026.10.01 ISO), start briefly, stop, recheck, categorize, tag, rename, move, show a refused change outside the sandbox, delete with files. `--keep` and `--cleanup`.
 - The fake serves the Stage 3 endpoints. UC-10 to UC-15 in `docs/use-cases.md`.
 - Stage 2, per-torrent detail (read-only): `WebUI.find_torrents()`/`resolve_hash()` (name substring or hash prefix), `properties()`, `files()`, `trackers()`, `webseeds()`, `peers()` (`sync/torrentPeers`), `maindata()` (`sync/maindata`, full and incremental) and `main_log()`.
 - `qbittorrent_poc.fields`: reference field sets per endpoint, status and priority names, and `diff_fields()`.
