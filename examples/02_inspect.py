@@ -133,6 +133,8 @@ def main() -> None:
 
         print("\n[8] Server vs reference (qbittorrent_poc.fields)")
         checks = {
+            "torrents/info": (t, fields.TORRENT_FIELDS),
+            "sync/maindata torrents": (list(full.get("torrents", {}).values()), fields.MAINDATA_TORRENT_FIELDS),
             "torrents/properties": (props, fields.PROPERTIES_FIELDS),
             "torrents/files": (file_rows, fields.FILE_FIELDS),
             "torrents/trackers": (tracker_rows, fields.TRACKER_FIELDS),

@@ -16,9 +16,9 @@ Synology NAS. Sibling of [maida-synology-api-poc](https://github.com/nsierraj/ma
 | --- | --- | --- |
 | 0 | Scaffold, CI, docs | done |
 | 1 | Discovery, read-only: versions, transfer stats, torrent list, categories, tags | done, verified on the NAS 2026-10-09 |
-| 2 | Per-torrent detail: properties, files, trackers, peers, log, sync | built, awaiting real-NAS run |
-| 3 | Control inside a sandbox tag: add, stop/start, recheck, category, tags, location, rename, delete | built, awaiting real-NAS run |
-| 4 | MCP server over stdio, wired into Claude Code | |
+| 2 | Per-torrent detail: properties, files, trackers, peers, log, sync | done, verified on the NAS 2026-10-09 |
+| 3 | Control inside a sandbox tag: add, stop/start, recheck, category, tags, location, rename, delete | done, verified on the NAS 2026-10-09 |
+| 4 | MCP server over stdio, wired into Claude Code | next |
 | 5 | HTTP transport, Docker image, Container Manager, reverse proxy | |
 
 ## Setup

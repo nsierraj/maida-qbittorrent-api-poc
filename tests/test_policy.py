@@ -57,3 +57,14 @@ def test_bad_tag_config():
         TorrentPolicy("")
     with pytest.raises(ValueError):
         TorrentPolicy("a,b")
+
+
+def test_check_row_covers_the_incomplete_folder():
+    p = TorrentPolicy(sandbox_path="/data/torrents/poc")
+    ok = {"save_path": "/data/torrents/poc", "download_path": ""}
+    assert p.check_row(ok) is ok
+    p.check_row({"save_path": "/data/torrents/poc", "download_path": "/data/torrents/poc/incomplete"})
+    with pytest.raises(PolicyError, match="Incomplete data goes to '/data/torrents/incoming'"):
+        p.check_row({"save_path": "/data/torrents/poc", "download_path": "/data/torrents/incoming"})
+    with pytest.raises(PolicyError):
+        p.check_row({"save_path": "/data/torrents/completed", "download_path": ""})

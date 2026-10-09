@@ -43,43 +43,53 @@ TORRENT_STATES = (
     "stalledDL", "checkingDL", "forcedDL", "checkingResumeData", "moving", "unknown",
 )
 
-# torrents/properties (wiki 5.0; unverified).
+# torrents/properties (real 5.2.3, recorded 2026-10-09). The wiki's `isPrivate` is absent; 5.2.3
+# sends both `private` and `is_private`, plus hash, name, progress and paths.
 PROPERTIES_FIELDS = (
-    "addition_date", "comment", "completion_date", "created_by", "creation_date", "dl_limit",
-    "dl_speed", "dl_speed_avg", "eta", "isPrivate", "last_seen", "nb_connections",
+    "addition_date", "availability", "comment", "completion_date", "created_by", "creation_date",
+    "dl_limit", "dl_speed", "dl_speed_avg", "download_path", "eta", "has_metadata", "hash",
+    "infohash_v1", "infohash_v2", "is_private", "last_seen", "name", "nb_connections",
     "nb_connections_limit", "peers", "peers_total", "piece_size", "pieces_have", "pieces_num",
-    "reannounce", "save_path", "seeding_time", "seeds", "seeds_total", "share_ratio",
-    "time_elapsed", "total_downloaded", "total_downloaded_session", "total_size",
-    "total_uploaded", "total_uploaded_session", "total_wasted", "up_limit", "up_speed",
+    "popularity", "private", "progress", "reannounce", "save_path", "seeding_time", "seeds",
+    "seeds_total", "share_ratio", "time_elapsed", "total_downloaded", "total_downloaded_session",
+    "total_size", "total_uploaded", "total_uploaded_session", "total_wasted", "up_limit", "up_speed",
     "up_speed_avg",
 )
 
-# torrents/files (wiki 5.0; unverified). priority: 0 skip, 1 normal, 6 high, 7 maximal.
+# torrents/files (wiki 5.0; matches real 5.2.3). priority: 0 skip, 1 normal, 6 high, 7 maximal.
 FILE_FIELDS = ("availability", "index", "is_seed", "name", "piece_range", "priority", "progress", "size")
 FILE_PRIORITIES = {0: "skip", 1: "normal", 6: "high", 7: "maximal"}
 
-# torrents/trackers (wiki 5.0; unverified). Rows with tier < 0 are DHT, PeX and LSD.
+# torrents/trackers (wiki 5.0; matches real 5.2.3). Rows with tier < 0 are DHT, PeX and LSD.
 TRACKER_FIELDS = ("msg", "num_downloaded", "num_leeches", "num_peers", "num_seeds", "status", "tier", "url")
 TRACKER_STATUSES = {0: "disabled", 1: "not contacted", 2: "working", 3: "updating", 4: "not working"}
 
-# sync/torrentPeers `peers` values (wiki says TODO; from qBittorrent's source; unverified).
+# sync/torrentPeers `peers` values (real 5.2.3, 98 peers recorded 2026-10-09; the wiki says TODO).
+# host_name is the peer's reverse DNS name: as identifying as its IP. connection is "μTP", "BT"
+# or "Web" (web seeds); client can be empty.
 PEER_FIELDS = (
     "client", "connection", "country", "country_code", "dl_speed", "downloaded", "files", "flags",
-    "flags_desc", "ip", "peer_id_client", "port", "progress", "relevance", "up_speed", "uploaded",
+    "flags_desc", "host_name", "ip", "peer_id_client", "port", "progress", "relevance", "up_speed",
+    "uploaded",
 )
 
-# sync/maindata `server_state` (from qBittorrent's source; unverified).
+# sync/maindata `server_state` (real 5.2.3: 26 keys; no `use_subcategories`).
 SERVER_STATE_FIELDS = (
     "alltime_dl", "alltime_ul", "average_time_queue", "connection_status", "dht_nodes",
     "dl_info_data", "dl_info_speed", "dl_rate_limit", "free_space_on_disk", "global_ratio",
     "last_external_address_v4", "last_external_address_v6", "queued_io_jobs", "queueing",
     "read_cache_hits", "read_cache_overload", "refresh_interval", "total_buffers_size",
     "total_peer_connections", "total_queued_size", "total_wasted_session", "up_info_data",
-    "up_info_speed", "up_rate_limit", "use_alt_speed_limits", "use_subcategories",
-    "write_cache_overload",
+    "up_info_speed", "up_rate_limit", "use_alt_speed_limits", "write_cache_overload",
 )
 
-# log/main entries (wiki 5.0; unverified). type is a bit flag.
+# sync/maindata torrent rows (real 5.2.3): keyed by hash, so no `hash` field, plus three
+# tracker-health flags that torrents/info didn't send in Stage 1.
+MAINDATA_TORRENT_FIELDS = tuple(sorted(
+    (set(TORRENT_FIELDS) - {"hash"}) | {"has_other_announce_error", "has_tracker_error", "has_tracker_warning"}
+))
+
+# log/main entries (wiki 5.0; matches real 5.2.3). type is a bit flag.
 LOG_FIELDS = ("id", "message", "timestamp", "type")
 LOG_TYPES = {1: "normal", 2: "info", 4: "warning", 8: "critical"}
 

@@ -17,10 +17,11 @@ def test_mask_ips():
 
 
 def test_peers_lose_ips_and_keys():
-    sync = {"rid": 3, "peers": {"198.51.100.1:51413": {"ip": "198.51.100.1", "port": 51413, "client": "x"}},
+    sync = {"rid": 3, "peers": {"198.51.100.1:51413": {"ip": "198.51.100.1", "port": 51413, "client": "x",
+                                                       "host_name": "host-1.peers.example.net"}},
             "peers_removed": ["198.51.100.2:6881"]}
     clean = samples.peers(sync)
-    assert "198.51.100" not in str(clean)
+    assert "198.51.100" not in str(clean) and "peers.example.net" not in str(clean)
     assert clean["peers"]["peer-001"]["client"] == "x"
 
 

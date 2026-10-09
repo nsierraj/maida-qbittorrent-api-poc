@@ -190,14 +190,20 @@ class WebUI:
         sequential: bool | None = None,
         skip_checking: bool | None = None,
         auto_tmm: bool = False,
+        use_download_path: bool | None = None,
+        download_path: str | None = None,
     ) -> Any:
         """torrents/add from magnet or http(s) URLs. Adds stopped by default.
 
         5.x renamed the `paused` parameter to `stopped`; both are sent so either server
         generation honors it (errata records which one 5.2.3 reads). autoTMM is sent as false by
         default: with Automatic Torrent Management on, the server would ignore `savepath` and use
-        the category's or the default save path. Returns the server's
-        answer ("Ok." or a JSON summary); raises QbtError 409 when nothing was added.
+        the category's or the default save path. use_download_path/download_path control the
+        "keep incomplete torrents in" folder per torrent (None = the server's setting). Returns
+        the server's
+        answer: JSON `{added_torrent_ids, success_count, pending_count, failure_count}` on 5.2.3
+        (URL adds are pending: the server fetches the file afterwards), "Ok." on older servers.
+        Raises QbtError 409 when nothing was added.
         """
         urls = list(urls)
         if not urls:
@@ -215,6 +221,8 @@ class WebUI:
                 "sequentialDownload": sequential,
                 "skip_checking": skip_checking,
                 "autoTMM": auto_tmm,
+                "useDownloadPath": use_download_path,
+                "downloadPath": download_path,
             },
             # torrents/add is documented as multipart/form-data.
             files={"_": (None, "")},

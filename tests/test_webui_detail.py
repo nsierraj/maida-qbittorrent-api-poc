@@ -70,6 +70,7 @@ def test_maindata_full_then_delta(api, qbt):
     assert full["full_update"] is True
     assert set(full) >= {"rid", "torrents", "categories", "tags", "server_state"}
     assert len(full["torrents"]) == len(qbt.torrents)
+    assert set(next(iter(full["torrents"].values()))) == set(fields.MAINDATA_TORRENT_FIELDS)
     assert set(full["server_state"]) == set(fields.SERVER_STATE_FIELDS)
 
     nothing = api.maindata(full["rid"])

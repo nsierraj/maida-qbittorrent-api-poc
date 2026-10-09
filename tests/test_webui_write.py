@@ -17,12 +17,48 @@ def test_magnet_hash_forms():
 
 
 def test_add_stopped_sends_both_names_and_multipart(api, qbt):
-    assert api.add([MAGNET], savepath="/data/torrents/poc", tags=["poc"]) == "Ok."
+    answer = api.add([MAGNET], savepath="/data/torrents/poc", tags=["poc"])
+    assert answer == {"added_torrent_ids": [H], "failure_count": 0, "pending_count": 0, "success_count": 1}
     _, endpoint, data = qbt.requests[-1]
     assert endpoint == "torrents/add"
     assert data["stopped"] == "true" and data["paused"] == "true"
+    # Observed on 5.2.3: a new torrent shows checkingResumeData first, then settles.
+    assert api.list_torrents(hashes=[H])[0]["state"] == "checkingResumeData"
     row = api.list_torrents(hashes=[H])[0]
     assert row["state"] == "stoppedDL" and row["tags"] == "poc" and not row["has_metadata"]
+    assert "_settle" not in row and "_seen" not in row
+
+
+def test_server_incomplete_folder_applies_unless_disabled(api, qbt):
+    api.add([MAGNET], savepath="/data/torrents/poc")
+    assert api.list_torrents(hashes=[H])[0]["download_path"] == "/data/torrents/incoming"
+    api.delete([H], delete_files=True)
+    api.add([MAGNET], savepath="/data/torrents/poc", use_download_path=False)
+    assert qbt.requests[-1][2]["useDownloadPath"] == "false"
+    row = api.list_torrents(hashes=[H])[0]
+    assert row["download_path"] == "" and row["content_path"].startswith("/data/torrents/poc/")
+
+
+def test_recheck_goes_through_checking(api, qbt):
+    api.add([MAGNET])
+    api.list_torrents(), api.list_torrents()  # let the add settle
+    api.recheck([H])
+    assert api.list_torrents(hashes=[H])[0]["state"] == "checkingDL"
+    assert api.list_torrents(hashes=[H])[0]["state"] == "stoppedDL"
+
+
+def test_add_by_url_is_pending(api, qbt):
+    from .fake_qbt import ARCH_HASH, ARCH_URL
+
+    assert api.add([ARCH_URL])["pending_count"] == 1
+    assert api.list_torrents(hashes=[ARCH_HASH])
+
+
+def test_legacy_text_answer_still_works(api, qbt):
+    qbt.legacy_add_answer = True
+    assert api.add([MAGNET]) == "Ok."
+    with pytest.raises(QbtError):
+        api.add([MAGNET])
 
 
 def test_add_disables_auto_tmm_so_savepath_holds(api, qbt):

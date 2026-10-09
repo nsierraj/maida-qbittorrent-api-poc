@@ -22,7 +22,7 @@ TORRENT_SECRETS = {"name", "magnet_uri", "tracker", "save_path", "content_path",
 PROPERTIES_SECRETS = {"save_path", "download_path", "comment", "created_by", "hash", "name",
                       "infohash_v1", "infohash_v2"}
 TRANSFER_SECRETS = {"last_external_address_v4", "last_external_address_v6"}
-PEER_SECRETS = {"ip", "port"}
+PEER_SECRETS = {"ip", "port", "host_name"}  # host_name: reverse DNS of the peer (real 5.2.3)
 
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6 = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}\b")
