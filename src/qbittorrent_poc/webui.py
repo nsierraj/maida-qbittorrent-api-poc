@@ -5,10 +5,13 @@ See docs/use-cases.md for what each method was verified against.
 
 from __future__ import annotations
 
+import base64
+import re
 from collections.abc import Iterable
 from typing import Any
 
 from .client import QbtClient
+from .errors import QbtError
 from .fields import TORRENT_FIELDS, TORRENT_STATES, WEBUI_SECURITY_PREFS  # noqa: F401  (re-exported)
 
 # torrents/info `filter` values in qBittorrent 5.x (the wiki's `paused` is now `stopped`).
@@ -168,3 +171,127 @@ class WebUI:
             "log/main", normal=normal, info=info, warning=warning, critical=critical,
             last_known_id=last_known_id,
         )
+
+    # =====================================================================================
+    # Stage 3: changes. These are the raw calls; examples and the MCP server go through
+    # qbittorrent_poc.sandbox.Sandbox, which applies TorrentPolicy first.
+    # =====================================================================================
+
+    # -- UC-10: add ---------------------------------------------------------------------------
+    def add(
+        self,
+        urls: Iterable[str],
+        *,
+        savepath: str | None = None,
+        category: str | None = None,
+        tags: Iterable[str] = (),
+        stopped: bool = True,
+        rename: str | None = None,
+        sequential: bool | None = None,
+        skip_checking: bool | None = None,
+        auto_tmm: bool = False,
+    ) -> Any:
+        """torrents/add from magnet or http(s) URLs. Adds stopped by default.
+
+        5.x renamed the `paused` parameter to `stopped`; both are sent so either server
+        generation honors it (errata records which one 5.2.3 reads). autoTMM is sent as false by
+        default: with Automatic Torrent Management on, the server would ignore `savepath` and use
+        the category's or the default save path. Returns the server's
+        answer ("Ok." or a JSON summary); raises QbtError 409 when nothing was added.
+        """
+        urls = list(urls)
+        if not urls:
+            raise ValueError("Give at least one magnet or http(s) URL.")
+        answer = self.client.post(
+            "torrents/add",
+            {
+                "urls": "\n".join(urls),
+                "savepath": savepath,
+                "category": category,
+                "tags": ",".join(tags) or None,
+                "stopped": stopped,
+                "paused": stopped,
+                "rename": rename,
+                "sequentialDownload": sequential,
+                "skip_checking": skip_checking,
+                "autoTMM": auto_tmm,
+            },
+            # torrents/add is documented as multipart/form-data.
+            files={"_": (None, "")},
+        )
+        if isinstance(answer, str) and answer.strip() == "Fails.":
+            raise QbtError("torrents/add", 409, "Fails. (already in qBittorrent, or an invalid URL)")
+        if isinstance(answer, dict) and answer.get("success_count") == 0 and answer.get("failure_count"):
+            raise QbtError("torrents/add", 409, f"nothing added: {answer}")
+        return answer
+
+    # -- UC-11: stop, start, recheck, reannounce ------------------------------------------------
+    def stop(self, hashes: str | Iterable[str]) -> None:
+        self.client.post("torrents/stop", {"hashes": join_hashes(hashes)})
+
+    def start(self, hashes: str | Iterable[str]) -> None:
+        self.client.post("torrents/start", {"hashes": join_hashes(hashes)})
+
+    def recheck(self, hashes: str | Iterable[str]) -> None:
+        self.client.post("torrents/recheck", {"hashes": join_hashes(hashes)})
+
+    def reannounce(self, hashes: str | Iterable[str]) -> None:
+        self.client.post("torrents/reannounce", {"hashes": join_hashes(hashes)})
+
+    # -- UC-12: categories ---------------------------------------------------------------------
+    def create_category(self, name: str, save_path: str = "") -> None:
+        """409 if the name is invalid or already exists."""
+        self.client.post("torrents/createCategory", {"category": name, "savePath": save_path})
+
+    def remove_categories(self, names: Iterable[str]) -> None:
+        self.client.post("torrents/removeCategories", {"categories": "\n".join(names)})
+
+    def set_category(self, hashes: str | Iterable[str], category: str) -> None:
+        """category "" removes it. 409 if the category doesn't exist."""
+        self.client.post("torrents/setCategory", {"hashes": join_hashes(hashes), "category": category})
+
+    # -- UC-13: tags -----------------------------------------------------------------------------
+    def add_tags(self, hashes: str | Iterable[str], tags: Iterable[str]) -> None:
+        """Tags that don't exist yet are created."""
+        self.client.post("torrents/addTags", {"hashes": join_hashes(hashes), "tags": ",".join(tags)})
+
+    def remove_tags(self, hashes: str | Iterable[str], tags: Iterable[str]) -> None:
+        tags = list(tags)
+        if not tags:
+            raise ValueError("Name the tags to remove (an empty list would remove all of them).")
+        self.client.post("torrents/removeTags", {"hashes": join_hashes(hashes), "tags": ",".join(tags)})
+
+    def delete_tags(self, tags: Iterable[str]) -> None:
+        """Delete tags from qBittorrent entirely (from every torrent)."""
+        self.client.post("torrents/deleteTags", {"tags": ",".join(tags)})
+
+    # -- UC-14: rename and move ---------------------------------------------------------------------
+    def rename(self, torrent_hash: str, name: str) -> None:
+        """The display name only; files on disk keep their names. 409 if name is empty."""
+        self.client.post("torrents/rename", {"hash": torrent_hash, "name": name})
+
+    def set_location(self, hashes: str | Iterable[str], location: str) -> None:
+        """Move data to a container path. 400 empty, 403 no write access, 409 can't create."""
+        self.client.post("torrents/setLocation", {"hashes": join_hashes(hashes), "location": location})
+
+    # -- UC-15: delete ---------------------------------------------------------------------------------
+    def delete(self, hashes: str | Iterable[str], *, delete_files: bool) -> None:
+        """Remove torrents; delete_files=True also removes the downloaded data. No default on
+        purpose. The server answers 200 even for unknown hashes."""
+        self.client.post("torrents/delete", {"hashes": join_hashes(hashes), "deleteFiles": delete_files})
+
+
+_BTIH = re.compile(r"xt=urn:btih:([0-9a-zA-Z]+)")
+
+
+def magnet_hash(uri: str) -> str:
+    """The v1 info hash of a magnet link as 40 lowercase hex characters (also from base32)."""
+    m = _BTIH.search(uri)
+    if not m:
+        raise ValueError("Not a magnet link with an xt=urn:btih: info hash.")
+    value = m.group(1)
+    if len(value) == 40 and all(c in "0123456789abcdefABCDEF" for c in value):
+        return value.lower()
+    if len(value) == 32:
+        return base64.b32decode(value.upper()).hex()
+    raise ValueError(f"Unrecognized info hash {value!r} in the magnet link.")
