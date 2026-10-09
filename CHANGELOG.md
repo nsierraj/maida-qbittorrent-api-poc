@@ -5,6 +5,10 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-09
+
+First release: the library, examples and MCP server, verified against qBittorrent 5.2.3 on a Synology DS720+, with the server running in Container Manager behind DSM's reverse proxy.
+
 ### Added
 - Stage 5: HTTP transport for the MCP server (`QBT_MCP_TRANSPORT=http`). It uses streamable HTTP with plain JSON responses, requires a bearer token (`QBT_MCP_TOKEN`, at least 32 characters) on every request, and leaves `GET /healthz` open. stdio stays the default.
 - `Dockerfile`, `docker-compose.yml` (`127.0.0.1:8766`) and `.env.container.example` for Synology Container Manager behind DSM's reverse proxy (8444), documented in `docs/mcp-server.md`. CI builds and runs the image; Dependabot watches its base images.
@@ -57,3 +61,6 @@ The project follows [Semantic Versioning](https://semver.org/); while it is 0.x,
 - Samples now also redact peers' `host_name`.
 - `examples/01_discover.py` wrote its samples to `samples/` in the current folder, not to `out/`, when `.env` had an empty `QBT_POC_OUT=` (as `.env.example` does). An empty value now means `out`.
 - `examples/01_discover.py` saved the server's external address (`last_external_address_v4`/`_v6`, the VPN exit IP) unredacted in `transfer_info.json`.
+
+[Unreleased]: https://github.com/nsierraj/maida-qbittorrent-api-poc/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/nsierraj/maida-qbittorrent-api-poc/releases/tag/v0.1.0
