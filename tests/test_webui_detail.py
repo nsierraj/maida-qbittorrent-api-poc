@@ -15,6 +15,11 @@ def test_find_by_name_and_prefix(api, qbt):
     assert api.resolve_hash(h(qbt, 3)) == h(qbt, 3)
 
 
+def test_exact_name_beats_substring(api, qbt):
+    qbt.torrents[1]["name"] = "ubuntu"
+    assert api.resolve_hash("Ubuntu") == h(qbt, 1)  # also a substring of torrent 0's name
+
+
 def test_resolve_refuses_ambiguous_and_missing(api):
     with pytest.raises(ValueError, match="torrents match 'iso'"):
         api.resolve_hash("iso")

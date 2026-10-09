@@ -103,7 +103,8 @@ class WebUI:
     def find_torrents(self, query: str) -> list[dict[str, Any]]:
         """Torrents whose hash starts with `query` (case-insensitive) or whose name contains it.
 
-        An exact hash match wins outright. Matching is done here: the API has no search.
+        An exact hash wins outright, then an exact name (case-insensitive). Matching is done
+        here: the API has no search.
         """
         q = query.strip().lower()
         if not q:
@@ -112,6 +113,9 @@ class WebUI:
         exact = [t for t in torrents if t["hash"].lower() == q]
         if exact:
             return exact
+        named = [t for t in torrents if t["name"].lower() == q]
+        if named:
+            return named
         return [t for t in torrents if t["hash"].lower().startswith(q) or q in t["name"].lower()]
 
     def resolve_hash(self, query: str) -> str:

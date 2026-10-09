@@ -6,12 +6,13 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 
 - `uv sync`: install (Python 3.11–3.13; `.python-version` pins 3.13 to match CI and the container image)
 - `uv run pytest`: the whole suite, against the fake qBittorrent. Must pass before any commit. CI runs it on Python 3.11–3.13.
+- `uv run qbittorrent-mcp`: the MCP server (stdio). It reads the same `.env`; `QBT_MCP_ALLOW_WRITES` and `QBT_MCP_ALLOW_DELETE` enable the change and delete tools.
 - `uv run examples/0N_*.py`: real-NAS runs. They need `.env` and are run by the user. Write examples only touch torrents tagged `QBT_SANDBOX_TAG`.
 
 ## Code
 
 - `src/qbittorrent_poc/`: the library. `client.py` (HTTP + API key), `webui.py` (`WebUI`, one method per use case; all wire-format knowledge), `fields.py` (reference field sets per endpoint; "real 5.2.3" sets are authoritative, "wiki"/"source" sets are unverified), `samples.py` (redaction), `policy.py` (`TorrentPolicy`), `sandbox.py` (`Sandbox`: the only way examples and the MCP server change anything), `config.py`, `errors.py`, `fmt.py`.
-- `src/qbittorrent_mcp/`: the MCP server (added in a later stage).
+- `src/qbittorrent_mcp/server.py`: the MCP server: read tools always, change tools behind `QBT_MCP_ALLOW_WRITES`, delete behind `QBT_MCP_ALLOW_DELETE` too, 2 prompts. All changes go through `Sandbox`.
 - `examples/`: numbered scripts run by hand against the real NAS.
 - `tests/`: `fake_qbt.py` is an in-memory qBittorrent; when you learn a new quirk on the real server, add it to the fake and add a test.
 - `docs/qbittorrent/webui-api.md`: condensed API reference with an Errata section. Read it first.

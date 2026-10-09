@@ -139,6 +139,7 @@ def _response(status: int, body: Any = "", ctype: str | None = None) -> requests
         r._content = str(body).encode()
         r.headers["Content-Type"] = ctype or "text/plain; charset=UTF-8"
     r.encoding = "utf-8"
+    r._content_consumed = True  # lets iter_content()/streaming read the body
     return r
 
 

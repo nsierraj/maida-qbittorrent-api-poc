@@ -20,41 +20,28 @@ from __future__ import annotations
 import argparse
 import os
 import time
-from urllib.parse import parse_qs, urlsplit
-
-import requests
 
 from qbittorrent_poc import PolicyError, QbtError, Sandbox, Settings, TorrentPolicy, WebUI, connect, fmt
 from qbittorrent_poc.config import mask
-from qbittorrent_poc.torrentfile import MAX_TORRENT_BYTES, TorrentFileError, parse
-from qbittorrent_poc.webui import magnet_hash, split_tags
+from qbittorrent_poc import torrentfile
+from qbittorrent_poc.sandbox import TRANSIENT_STATES as TRANSIENT
+from qbittorrent_poc.torrentfile import TorrentFileError
+from qbittorrent_poc.webui import split_tags
 
 ARCH = "https://fastly.mirror.pkgbuild.com/iso/2026.10.01/archlinux-2026.10.01-x86_64.iso.torrent"
 HELPER_TAG = "poc-extra"
-# States a torrent passes through right after torrents/add, before it settles (seen on 5.2.3).
-TRANSIENT = {"checkingResumeData", "allocating", "checkingDL", "checkingUP", "moving", "unknown"}
 
 
 def identify(url: str) -> tuple[str, str]:
-    """(info hash, name) before adding: from the magnet link itself, or by fetching the .torrent
-    file here and hashing its info dictionary (qBittorrent fetches it again when adding)."""
-    if url.startswith("magnet:"):
-        names = parse_qs(urlsplit(url).query).get("dn", [])
-        h = magnet_hash(url)
-        return h, names[0] if names else h
-    if not url.startswith(("http://", "https://")):
-        raise SystemExit("QBT_TEST_TORRENT must be a magnet link or an http(s) URL of a .torrent file.")
+    """(info hash, name) before adding: from the magnet link, or by fetching the .torrent file."""
     try:
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        if len(resp.content) > MAX_TORRENT_BYTES:
-            raise TorrentFileError("too large")
-        meta = parse(resp.content)
-    except (requests.RequestException, TorrentFileError) as e:
+        h, name, meta = torrentfile.identify(url)
+    except (TorrentFileError, ValueError) as e:
         raise SystemExit(f"Couldn't read the test torrent at {url}: {e}") from e
-    size = fmt.size(meta.size) if meta.size is not None else "unknown size"
-    print(f"Test torrent: {meta.name}, {size}, {len(meta.webseeds)} web seeds, hash {meta.info_hash[:12]}…")
-    return meta.info_hash, meta.name
+    if meta is not None:
+        size = fmt.size(meta.size) if meta.size is not None else "unknown size"
+        print(f"Test torrent: {meta.name}, {size}, {len(meta.webseeds)} web seeds, hash {h[:12]}…")
+    return h, name
 
 
 def show(row: dict | None) -> str:
