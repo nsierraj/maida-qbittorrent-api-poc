@@ -10,7 +10,7 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 
 ## Code
 
-- `src/qbittorrent_poc/`: the library (client, API methods, policy, config). All wire-format knowledge lives here.
+- `src/qbittorrent_poc/`: the library. `client.py` (HTTP + API key), `webui.py` (`WebUI`, one method per use case; all wire-format knowledge), `fields.py` (reference field sets per endpoint; "real 5.2.3" sets are authoritative, "wiki"/"source" sets are unverified), `samples.py` (redaction), `config.py`, `errors.py`, `fmt.py`.
 - `src/qbittorrent_mcp/`: the MCP server (added in a later stage).
 - `examples/`: numbered scripts run by hand against the real NAS.
 - `tests/`: `fake_qbt.py` is an in-memory qBittorrent; when you learn a new quirk on the real server, add it to the fake and add a test.
@@ -27,6 +27,8 @@ Python library, examples and (later) an MCP server for the qBittorrent WebUI API
 - **Order for new operations:** library method + fake + test → real-NAS example → MCP tool → docs (`use-cases.md`, `mcp-server.md`).
 - **Nothing in the library or the MCP server may print to stdout**; with the stdio transport, stdout is the protocol channel. Use `logging` to stderr.
 - **`mcp` is 2.x:** use `mcp.server.mcpserver.MCPServer` and `mcp_types.ToolAnnotations` (snake_case), as the sibling repo does. Don't follow 1.x `FastMCP` examples.
+- **Example output gets pasted into chats.** Anything an example prints or saves goes through `samples.py`: no tracker paths (passkeys), peer or external IPs, raw log messages, and in samples no names, hashes or paths. Add a test that the secret doesn't appear when you add output.
+- **After a real-NAS run**, record differences in `webui-api.md` §8, update the `fields.py` set (mark it "real 5.2.3") and the fake, in one PR.
 - **Never commit `.env` or `out/`** (gitignored), and keep them in `.dockerignore`. The repo is public: no real IP, hostname, API key or torrent names in docs or samples.
 
 ## Repo workflow

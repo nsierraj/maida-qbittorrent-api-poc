@@ -1,6 +1,6 @@
 """Proof-of-concept client for the qBittorrent WebUI API (v2.x, qBittorrent 5.x)."""
 
-from . import fmt
+from . import fields, fmt, samples
 from .client import QbtClient
 from .config import Settings, connect
 from .errors import QbtError
@@ -16,5 +16,7 @@ __all__ = [
     "Settings",
     "WebUI",
     "connect",
+    "fields",
     "fmt",
+    "samples",
 ]

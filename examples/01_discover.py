@@ -1,45 +1,18 @@
 """Example 1: what does this qBittorrent look like? Read-only.
 
 Versions -> global transfer state and WebUI security settings -> torrents by state and by
-filter -> categories and tags -> fields and states that differ from TORRENT_FIELDS/STATES. Finally it saves sanitized
-JSON samples to out/samples/ (gitignored) so the fake server in tests/ can follow the real one.
+filter -> categories and tags -> fields and states that differ from TORRENT_FIELDS/STATES.
+Finally it saves sanitized JSON samples to out/samples/ (gitignored) so the fake server in
+tests/ can follow the real one.
 """
 
 from __future__ import annotations
 
-import json
-import os
 from collections import Counter
-from pathlib import Path
 
-from qbittorrent_poc import FILTERS, TORRENT_FIELDS, TORRENT_STATES, Settings, WebUI, connect, fmt
+from qbittorrent_poc import FILTERS, TORRENT_FIELDS, TORRENT_STATES, Settings, WebUI, connect, fmt, samples
 from qbittorrent_poc.config import mask
 from qbittorrent_poc.webui import split_tags
-
-REDACT = {"name", "magnet_uri", "tracker", "save_path", "content_path", "download_path",
-          "root_path", "comment", "infohash_v1", "infohash_v2", "hash"}
-# transfer/info: the public address peers see (the VPN exit IP behind gluetun).
-REDACT_TRANSFER = {"last_external_address_v4", "last_external_address_v6"}
-
-
-def sanitize(torrents: list[dict]) -> list[dict]:
-    """Keep the structure and numbers; drop names, hashes, paths and tracker URLs."""
-    out = []
-    for i, t in enumerate(torrents, 1):
-        clean = {k: ("<redacted>" if k in REDACT and v else v) for k, v in t.items()}
-        clean["name"] = f"torrent-{i:03d}"
-        clean["hash"] = f"{i:040x}"
-        out.append(clean)
-    return out
-
-
-def sanitize_transfer(info: dict) -> dict:
-    return {k: ("<redacted>" if k in REDACT_TRANSFER and v else v) for k, v in info.items()}
-
-
-def out_dir() -> Path:
-    # `or`, not a getenv default: .env.example sets QBT_POC_OUT= (empty), which must mean "out".
-    return Path(os.getenv("QBT_POC_OUT") or "out") / "samples"
 
 
 def main() -> None:
@@ -110,18 +83,14 @@ def main() -> None:
         print(f"    fields not sent        : {', '.join(missing) or 'none'}")
         print(f"    unknown states         : {', '.join(unknown_states) or 'none'}")
 
-        target = out_dir()
-        target.mkdir(parents=True, exist_ok=True)
-        samples = {
+        target = samples.write_samples({
             "app.json": {"version": api.app_version(), "webapiVersion": api.webapi_version(),
                          "buildInfo": build},
-            "transfer_info.json": sanitize_transfer(info),
-            "torrents_info.json": sanitize(torrents),
+            "transfer_info.json": samples.transfer(info),
+            "torrents_info.json": samples.torrents(torrents),
             "categories.json": categories,
             "tags.json": tags,
-        }
-        for name, data in samples.items():
-            (target / name).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        })
         print(f"\n[6] Sanitized samples written to {target}/ "
               "(names, hashes, paths, trackers and external IPs redacted)")
 
