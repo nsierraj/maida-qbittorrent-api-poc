@@ -1,0 +1,64 @@
+# Redacted copy of the qBittorrent project running in Container Manager on the NAS, kept for
+# networking context (see README and docs/mcp-server.md). Based on
+# https://drfrankenstein.co.uk/2023/04/23/qbittorrent-with-gluetun-vpn-in-container-manager-on-a-synology-nas/
+#
+# Key facts for this repo:
+# - qbittorrent has no network of its own (network_mode: service:gluetun): it shares gluetun's
+#   network namespace, and gluetun publishes the WebUI port 8090 on the NAS.
+# - gluetun sits on the user-defined bridge "synobridge"; its firewall allows outbound traffic
+#   to that bridge's subnet and to the LAN subnet.
+# - Save paths in API calls are container paths (/data/torrents/...), i.e. /volume1/data/torrents
+#   on the NAS.
+services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - 8888:8888/tcp # HTTP proxy
+      - 8388:8388/tcp # Shadowsocks
+      - 8388:8388/udp # Shadowsocks
+      - 8090:8090 # qBittorrent WebUI
+    volumes:
+      - /volume1/docker/gluetun:/gluetun
+    environment:
+      - PUID=<uid>
+      - PGID=<gid>
+      - TZ=<tz>
+      - VPN_SERVICE_PROVIDER=<provider>
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=<redacted>
+      - OPENVPN_PASSWORD=<redacted>
+      - SERVER_COUNTRIES=<country>
+      - HTTPPROXY=off
+      - SHADOWSOCKS=off
+      - FIREWALL_OUTBOUND_SUBNETS=<synobridge subnet>/16,<LAN subnet>/24
+    network_mode: synobridge
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=<uid>
+      - PGID=<gid>
+      - TZ=<tz>
+      - WEBUI_PORT=8090
+      - UMASK=022
+    volumes:
+      - /volume1/docker/qbittorrent:/config
+      - /volume1/data/torrents:/data/torrents
+    network_mode: service:gluetun # run on the vpn network
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    restart: always
