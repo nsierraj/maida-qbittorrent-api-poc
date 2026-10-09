@@ -5,6 +5,11 @@ Run this once, before anything else. It answers questions the wiki doesn't:
 - Does the Referer/Origin check (CSRF protection) still apply to API key requests?
 - Does Host header validation reject a container name such as `gluetun` (matters for Stage 5)?
 
+Run it ONCE. Two probes send a missing and a wrong key on purpose. qBittorrent bans an IP for
+web_ui_ban_duration (default 1 hour) after web_ui_max_auth_fail_count (default 5) failed
+attempts; if API key failures count toward that limit, re-running this a few times in a row
+locks you out of the WebUI until the ban expires. Whether they count is worth recording too.
+
 Read-only: every probe is a GET of app/version or app/webapiVersion, plus one POST to a GET
 endpoint (expected to be refused). Copy the result table into docs/qbittorrent/webui-api.md §8.
 """

@@ -44,6 +44,8 @@ uv run examples/00_probe_auth.py
 uv run examples/01_discover.py
 ```
 
+**Run the probe once.** It sends one missing and one wrong key on purpose. qBittorrent bans an IP for an hour (Web UI options) after 5 failed attempts by default. Before retrying any example after a 401/403, check `QBT_API_KEY` in `.env`; if you do get locked out, the ban clears when it expires.
+
 ## Tests
 
 ```bash
