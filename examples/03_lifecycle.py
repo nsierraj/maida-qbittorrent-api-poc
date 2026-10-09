@@ -91,7 +91,15 @@ def run(api: WebUI, box: Sandbox, h: str, magnet: str, tag: str, root: str, args
     row = box.wait_for(h, lambda r: r is not None, timeout=30)
     honored = row["state"].startswith("stopped")
     print(f"    appeared: {show(row)}")
-    print(f"    tags {row['tags']!r}, save path {row['save_path']}")
+    print(f"    tags {row['tags']!r}, save path {row['save_path']}, auto_tmm {row.get('auto_tmm')}")
+    try:
+        box.policy.check_path(row["save_path"])
+    except PolicyError:
+        print("    !! the server put it OUTSIDE the sandbox save path (note it in the errata).")
+        print("       Stopping it and moving it into the sandbox before going on.")
+        box.stop([h])
+        box.set_location([h], root)
+        box.wait_for(h, lambda r: r["save_path"].rstrip("/") == root, timeout=60)
     print(f"    stop-on-add: {'honored' if honored else 'IGNORED (note it in the errata); stopping now'}")
     if not honored:
         box.stop([h])
@@ -117,6 +125,10 @@ def run(api: WebUI, box: Sandbox, h: str, magnet: str, tag: str, root: str, args
     time.sleep(2)
     row = api.list_torrents(hashes=[h])[0]
     print(f"    after 2s: {show(row)}")
+    if not row["state"].startswith("stopped"):
+        print("    recheck resumed it (note it in the errata); stopping it again")
+        box.stop([h])
+        box.wait_for(h, lambda r: r["state"].startswith("stopped"), timeout=30)
 
     print(f"\n[5] Category {tag!r} (createCategory if missing, setCategory)")
     created = box.ensure_category(tag, root)

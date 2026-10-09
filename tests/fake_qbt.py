@@ -147,7 +147,7 @@ class FakeQbt:
             "web_ui_clickjacking_protection_enabled": True, "bypass_local_auth": False,
             "bypass_auth_subnet_whitelist_enabled": False, "web_ui_max_auth_fail_count": 5,
             "web_ui_ban_duration": 3600, "web_ui_session_timeout": 3600, "use_https": False,
-            "web_ui_reverse_proxy_enabled": False,
+            "web_ui_reverse_proxy_enabled": False, "auto_tmm_enabled": False,
             # Secrets live here too; the library must never return them.
             "web_ui_password": "fake-password-hash", "proxy_password": "fake-proxy-secret",
         }
@@ -162,6 +162,7 @@ class FakeQbt:
             {"id": 4, "type": 8, "timestamp": 1_790_000_200, "message": "File error alert. Reason: disk full"},
         ]
         self.rechecked: list[str] = []
+        self.recheck_resumes = False
         self.deleted_files: list[str] = []  # hashes deleted with deleteFiles=true
         self._rid = 0
         self._sync_snapshots: dict[int, dict[str, Any]] = {}
@@ -472,6 +473,9 @@ class FakeQbt:
         if not urls:
             return _response(400, "")
         stopped = _truthy(p.get("stopped")) or _truthy(p.get("paused"))
+        # Automatic Torrent Management: when on (the request's autoTMM, else the server default),
+        # savepath is ignored and the category's or the default save path is used.
+        tmm = _truthy(p["autoTMM"]) if "autoTMM" in p else self.preferences.get("auto_tmm_enabled", False)
         added = 0
         for url in urls:
             h = magnet_hash(url)
@@ -487,7 +491,8 @@ class FakeQbt:
             t = make_torrent(name, "stoppedDL" if stopped else "metaDL", n=0, size=0, progress=0.0,
                              category=cat, tags=", ".join(sorted(x for x in p.get("tags", "").split(",") if x)))
             t.update(hash=h, infohash_v1=h, magnet_uri=url, has_metadata=False, pieces_num=0, pieces_have=0,
-                     save_path=p.get("savepath") or "/data/torrents/completed", content_path="",
+                     save_path=("/data/torrents/completed" if tmm else p.get("savepath"))
+                     or "/data/torrents/completed", content_path="", auto_tmm=tmm,
                      added_on=1_790_100_000 + len(self.torrents), completion_on=-1, priority=len(self.torrents))
             t["name"] = p.get("rename") or name
             self.torrents.append(t)
@@ -517,6 +522,8 @@ class FakeQbt:
 
     def _recheck(self, t: dict[str, Any], p: dict[str, Any]) -> None:
         self.rechecked.append(t["hash"])
+        if self.recheck_resumes and t["state"].startswith("stopped"):  # older qBittorrent behavior
+            self._start(t, p)
 
     def _set_category(self, p: dict[str, Any]) -> requests.Response:
         cat = p.get("category", "")

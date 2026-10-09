@@ -212,3 +212,19 @@ def test_03_ignored_stop_on_add_is_reported_and_corrected(env, monkeypatch, caps
     run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
     assert "stop-on-add: IGNORED" in out and "All lifecycle steps passed." in out
+
+
+def test_03_moves_a_torrent_the_server_put_outside_the_sandbox(env, monkeypatch, capsys):
+    original = env._add
+    env.routes["torrents/add"] = ("POST", lambda p: original({k: v for k, v in p.items() if k != "autoTMM"}))
+    env.preferences["auto_tmm_enabled"] = True
+    run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "OUTSIDE the sandbox save path" in out and "All lifecycle steps passed." in out
+
+
+def test_03_recheck_that_resumes_is_stopped_again(env, monkeypatch, capsys):
+    env.recheck_resumes = True
+    run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
+    out = capsys.readouterr().out
+    assert "recheck resumed it" in out and "All lifecycle steps passed." in out

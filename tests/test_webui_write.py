@@ -25,6 +25,21 @@ def test_add_stopped_sends_both_names_and_multipart(api, qbt):
     assert row["state"] == "stoppedDL" and row["tags"] == "poc" and not row["has_metadata"]
 
 
+def test_add_disables_auto_tmm_so_savepath_holds(api, qbt):
+    qbt.preferences["auto_tmm_enabled"] = True
+    api.add([MAGNET], savepath="/data/torrents/poc")
+    assert qbt.requests[-1][2]["autoTMM"] == "false"
+    row = api.list_torrents(hashes=[H])[0]
+    assert row["save_path"] == "/data/torrents/poc" and row["auto_tmm"] is False
+
+
+def test_server_default_tmm_would_ignore_savepath(qbt):
+    # What the fake does when a client doesn't send autoTMM (why add() always sends it).
+    qbt.preferences["auto_tmm_enabled"] = True
+    qbt._add({"urls": MAGNET, "savepath": "/data/torrents/poc"})
+    assert qbt.torrent(H)["save_path"] == "/data/torrents/completed"
+
+
 def test_add_twice_fails(api):
     api.add([MAGNET])
     with pytest.raises(QbtError) as exc:

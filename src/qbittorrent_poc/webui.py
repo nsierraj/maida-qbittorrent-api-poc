@@ -189,11 +189,14 @@ class WebUI:
         rename: str | None = None,
         sequential: bool | None = None,
         skip_checking: bool | None = None,
+        auto_tmm: bool = False,
     ) -> Any:
         """torrents/add from magnet or http(s) URLs. Adds stopped by default.
 
         5.x renamed the `paused` parameter to `stopped`; both are sent so either server
-        generation honors it (errata records which one 5.2.3 reads). Returns the server's
+        generation honors it (errata records which one 5.2.3 reads). autoTMM is sent as false by
+        default: with Automatic Torrent Management on, the server would ignore `savepath` and use
+        the category's or the default save path. Returns the server's
         answer ("Ok." or a JSON summary); raises QbtError 409 when nothing was added.
         """
         urls = list(urls)
@@ -211,6 +214,7 @@ class WebUI:
                 "rename": rename,
                 "sequentialDownload": sequential,
                 "skip_checking": skip_checking,
+                "autoTMM": auto_tmm,
             },
             # torrents/add is documented as multipart/form-data.
             files={"_": (None, "")},

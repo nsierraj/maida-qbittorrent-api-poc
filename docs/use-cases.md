@@ -106,11 +106,13 @@ the library method that implements it, and (from Stage 4) the MCP tool that expo
 - **Stopped on add:** 5.x renamed `paused` to `stopped`; the library sends both. `03_lifecycle.py` reports whether the new torrent arrived stopped, and stops it at once if not.
 - **Answer:** `Ok.` per the wiki, `Fails.` when nothing was added (for example, the hash is already present), which `add()` turns into `QbtError` 409. A JSON summary is also accepted, in case 5.2 answers that way.
 - **Magnets:** the info hash comes from the link (`magnet_hash()`, hex or base32), so the caller knows it before the torrent appears. Until metadata arrives the torrent has `has_metadata: false`, size 0 and state `metaDL` (running) or `stoppedDL`.
+- **Automatic Torrent Management:** with it on (per request or the server's `auto_tmm_enabled`), qBittorrent ignores `savepath`. `add()` always sends `autoTMM=false`, and `03_lifecycle.py` checks where the torrent actually landed.
 - **Sandbox:** `Sandbox.add()` always adds the sandbox tag and requires the save path to be inside the sandbox path.
 
 ## UC-11: Stop, start, recheck, reannounce
 
 - **Calls:** `POST torrents/stop|start|recheck|reannounce` with `hashes`. 200 even for unknown hashes, so the sandbox checks existence first.
+- **Recheck:** some versions resume a stopped torrent after a recheck; `03_lifecycle.py` stops it again and reports it.
 - **Method:** POST-only per the wiki; `03_lifecycle.py` sends one GET to `torrents/stop` (on the sandbox torrent) to record whether 405 is enforced.
 
 ## UC-12: Categories
