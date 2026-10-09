@@ -9,7 +9,7 @@ import pytest
 
 from qbittorrent_poc import config
 
-from .fake_qbt import API_KEY, ARCH_HASH, ARCH_SIZE, HOST, PORT
+from .fake_qbt import API_KEY, ARCH_HASH, ARCH_SIZE, ARCH_URL, HOST, PORT
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
@@ -159,7 +159,8 @@ def test_03_lifecycle(env, monkeypatch, capsys):
     run("03_lifecycle.py", "--run-seconds", "0", monkeypatch=monkeypatch)
     out = capsys.readouterr().out
     assert "Test torrent: archlinux-2026.10.01-x86_64.iso, 1.5 GiB, 1 web seeds" in out
-    assert "server answered: {'added_torrent_ids': [], 'failure_count': 0, 'pending_count': 1" in out
+    assert f"server answered: {{'added_torrent_ids': ['{ARCH_HASH}'], 'failure_count': 0, 'pending_count': 0" in out
+    assert env.downloads == [ARCH_URL]  # fetched once, here; qBittorrent got the bytes
     assert "appeared: checkingResumeData" in out and "settled : stoppedDL" in out
     assert "download path -," in out
     assert "checkingDL" in out and "verified (stoppedDL)" in out

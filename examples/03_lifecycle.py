@@ -11,7 +11,8 @@ QBT_SANDBOX_TAG, into QBT_SANDBOX_SAVEPATH. Then: start for --run-seconds -> sto
 sandbox -> delete with files. Every change goes through Sandbox/TorrentPolicy, which refuses
 locally (no request sent) anything not tagged QBT_SANDBOX_TAG or outside the save path.
 
-It also answers what the wiki leaves open: whether torrents/add honors `stopped` (5.x) or
+A .torrent URL is fetched here (public addresses only) and uploaded to qBittorrent as a file,
+the same way the MCP server adds it. It also answers what the wiki leaves open: whether torrents/add honors `stopped` (5.x) or
 `paused` (4.x), what torrents/add returns, and whether POST-only endpoints refuse GET.
 """
 
@@ -32,8 +33,8 @@ ARCH = "https://fastly.mirror.pkgbuild.com/iso/2026.10.01/archlinux-2026.10.01-x
 HELPER_TAG = "poc-extra"
 
 
-def identify(url: str) -> tuple[str, str]:
-    """(info hash, name) before adding: from the magnet link, or by fetching the .torrent file."""
+def identify(url: str) -> tuple[str, str, bytes | None]:
+    """(info hash, name, .torrent bytes or None for a magnet) before adding."""
     try:
         h, name, meta = torrentfile.identify(url)
     except (TorrentFileError, ValueError) as e:
@@ -41,7 +42,7 @@ def identify(url: str) -> tuple[str, str]:
     if meta is not None:
         size = fmt.size(meta.size) if meta.size is not None else "unknown size"
         print(f"Test torrent: {meta.name}, {size}, {len(meta.webseeds)} web seeds, hash {h[:12]}…")
-    return h, name
+    return h, name, meta.raw if meta is not None else None
 
 
 def show(row: dict | None) -> str:
@@ -77,7 +78,7 @@ def main() -> None:
                   f"tags {removed['tags'] or '-'}, categories {removed['categories'] or '-'}.")
             return
 
-        h, _ = identify(url)
+        h, _, raw = identify(url)
         existing = api.list_torrents(hashes=[h])
         if existing and tag not in split_tags(existing[0]["tags"]):
             raise SystemExit(f"{existing[0]['name']} is already in qBittorrent without the {tag!r} tag. "
@@ -86,7 +87,7 @@ def main() -> None:
             raise SystemExit("A sandbox copy of this torrent is still there; run with --cleanup first.")
 
         try:
-            run(api, box, h, url, tag, root, args)
+            run(api, box, h, url, raw, tag, root, args)
         except BaseException:
             print("\n!! Stopped early. Stopping the sandbox torrent; run with --cleanup to remove it.")
             try:
@@ -100,11 +101,14 @@ def poll(row: dict | None) -> None:
     print(f"      {show(row)}")
 
 
-def run(api: WebUI, box: Sandbox, h: str, url: str, tag: str, root: str, args: argparse.Namespace) -> None:
+def run(api: WebUI, box: Sandbox, h: str, url: str, raw: bytes | None, tag: str, root: str,
+        args: argparse.Namespace) -> None:
     print(f"\n[1] Add stopped (torrents/add: stopped, autoTMM=false, useDownloadPath=false), hash {h[:12]}…")
-    answer = box.add([url], savepath=root, stopped=True)
+    if raw is None:
+        answer = box.add([url], savepath=root, stopped=True)
+    else:  # upload the .torrent fetched above, as the MCP server does
+        answer = box.add(torrent_files=[(f"{h}.torrent", raw)], savepath=root, stopped=True)
     print(f"    server answered: {answer!r}")
-    # A URL add answers before qBittorrent has fetched the .torrent file; allow for that.
     row = box.wait_for(h, lambda r: r is not None, timeout=60)
     print(f"    appeared: {show(row)}")
     if row["state"] in TRANSIENT:

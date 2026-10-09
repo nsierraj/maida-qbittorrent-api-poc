@@ -184,8 +184,9 @@ class WebUI:
     # -- UC-10: add ---------------------------------------------------------------------------
     def add(
         self,
-        urls: Iterable[str],
+        urls: Iterable[str] = (),
         *,
+        torrent_files: Iterable[tuple[str, bytes]] = (),
         savepath: str | None = None,
         category: str | None = None,
         tags: Iterable[str] = (),
@@ -197,7 +198,8 @@ class WebUI:
         use_download_path: bool | None = None,
         download_path: str | None = None,
     ) -> Any:
-        """torrents/add from magnet or http(s) URLs. Adds stopped by default.
+        """torrents/add from magnet or http(s) URLs and/or .torrent file contents ((filename, bytes)
+        pairs, uploaded as `torrents` parts). Adds stopped by default.
 
         5.x renamed the `paused` parameter to `stopped`; both are sent so either server
         generation honors it (errata records which one 5.2.3 reads). autoTMM is sent as false by
@@ -210,12 +212,13 @@ class WebUI:
         Raises QbtError 409 when nothing was added.
         """
         urls = list(urls)
-        if not urls:
-            raise ValueError("Give at least one magnet or http(s) URL.")
+        uploads = [("torrents", (name, data, "application/x-bittorrent")) for name, data in torrent_files]
+        if not urls and not uploads:
+            raise ValueError("Give at least one magnet or http(s) URL, or a .torrent file.")
         answer = self.client.post(
             "torrents/add",
             {
-                "urls": "\n".join(urls),
+                "urls": "\n".join(urls) or None,
                 "savepath": savepath,
                 "category": category,
                 "tags": ",".join(tags) or None,
@@ -228,8 +231,9 @@ class WebUI:
                 "useDownloadPath": use_download_path,
                 "downloadPath": download_path,
             },
-            # torrents/add is documented as multipart/form-data.
-            files={"_": (None, "")},
+            # torrents/add is documented as multipart/form-data; the empty part forces it
+            # when there's no file to upload.
+            files=uploads or {"_": (None, "")},
         )
         if isinstance(answer, str) and answer.strip() == "Fails.":
             raise QbtError("torrents/add", 409, "Fails. (already in qBittorrent, or an invalid URL)")

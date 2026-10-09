@@ -187,7 +187,8 @@ class FakeQbt:
         self.add_settles_through: str | None = "checkingResumeData"  # observed on 5.2.3
         self.legacy_add_answer = False  # True: the wiki's "Ok."/"Fails." text instead of 5.2.3's JSON
         self.deleted_files: list[str] = []
-        self.web: dict[str, bytes] = {ARCH_URL: ARCH_TORRENT}  # non-API URLs (the "internet")  # hashes deleted with deleteFiles=true
+        self.web: dict[str, bytes | str] = {ARCH_URL: ARCH_TORRENT}  # the "internet"; str = redirect
+        self.downloads: list[str] = []  # every non-API URL fetched  # hashes deleted with deleteFiles=true
         self._rid = 0
         self._sync_snapshots: dict[int, dict[str, Any]] = {}
         self._peer_snapshots: dict[tuple[str, int], dict[str, Any]] = {}
@@ -235,16 +236,25 @@ class FakeQbt:
 
         def request(session: requests.Session, method: str, url: str, **kwargs: Any) -> requests.Response:
             headers = {**session.headers, **(kwargs.get("headers") or {})}
-            return fake.handle(method.upper(), url, headers, kwargs.get("params") or kwargs.get("data") or {})
+            params = dict(kwargs.get("params") or kwargs.get("data") or {})
+            files = kwargs.get("files")
+            if isinstance(files, list):  # torrents/add uploads: [("torrents", (name, bytes, type)), ...]
+                params["_files"] = [part[1][1] for part in files if part[0] == "torrents"]
+            return fake.handle(method.upper(), url, headers, params)
 
         monkeypatch.setattr(requests.Session, "request", request)
 
     def handle(self, method: str, url: str, headers: dict[str, str], params: dict[str, Any]) -> requests.Response:
         parts = urlsplit(url)
         if not parts.path.startswith("/api/v2/"):  # a plain download, e.g. a .torrent file
+            self.downloads.append(url)
             body = self.web.get(url)
             if body is None:
                 return _response(404, "Not Found")
+            if isinstance(body, str):  # a redirect to that URL
+                r = _response(302, "")
+                r.headers["Location"] = body
+                return r
             r = _response(200, "")
             r._content = body
             r.headers["Content-Type"] = "application/x-bittorrent"
@@ -522,8 +532,10 @@ class FakeQbt:
         from qbittorrent_poc.webui import magnet_hash
 
         urls = [u for u in p.get("urls", "").split("\n") if u.strip()]
-        if not urls:
+        uploads = p.get("_files", [])
+        if not urls and not uploads:
             return _response(400, "")
+        urls += [("upload", data) for data in uploads]
         stopped = _truthy(p.get("stopped")) or _truthy(p.get("paused"))
         # Automatic Torrent Management: when on (the request's autoTMM, else the server default),
         # savepath is ignored and the category's or the default save path is used.
@@ -531,7 +543,17 @@ class FakeQbt:
         added, pending, failed, ids = 0, 0, 0, []
         for url in urls:
             size, has_meta = 0, False
-            if url.startswith("magnet:"):
+            if isinstance(url, tuple):  # an uploaded .torrent file
+                try:
+                    meta = torrentfile.parse(url[1])
+                except torrentfile.TorrentFileError:
+                    return _response(415, "")
+                h, name, size, has_meta = meta.info_hash, meta.name, meta.size or 0, True
+                url = f"magnet:?xt=urn:btih:{h}"  # how the row's magnet_uri looks for a file add
+                if self.torrent(h):
+                    failed += 1
+                    continue
+            elif url.startswith("magnet:"):
                 h = magnet_hash(url)
                 name = next((part[3:] for part in url.split("&") if part.startswith("dn=")), h)
             else:  # qBittorrent fetches the .torrent itself, after answering
@@ -570,7 +592,7 @@ class FakeQbt:
                 t["_settle"] = t["state"]
                 t["state"] = self.add_settles_through
             self.torrents.append(t)
-            if url.startswith("magnet:"):
+            if url.startswith("magnet:"):  # magnets and uploads are added at once; URLs are pending
                 added += 1
                 ids.append(h)
         if self.legacy_add_answer:

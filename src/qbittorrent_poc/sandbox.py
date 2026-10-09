@@ -44,7 +44,8 @@ class Sandbox:
         return self.api.list_torrents(tag=self.policy.sandbox_tag)
 
     # -- changes -------------------------------------------------------------------------------
-    def add(self, urls: Iterable[str], *, savepath: str | None = None, category: str | None = None,
+    def add(self, urls: Iterable[str] = (), *, torrent_files: Iterable[tuple[str, bytes]] = (),
+            savepath: str | None = None, category: str | None = None,
             tags: Iterable[str] = (), stopped: bool = True, **kwargs: Any) -> Any:
         self.policy.require_writes()
         path = self.policy.check_path(savepath or self.policy.sandbox_path or "")
@@ -52,7 +53,8 @@ class Sandbox:
         # Never auto-managed (it would ignore savepath) and no separate incomplete-downloads folder
         # (the server's may be outside the sandbox): data goes straight to the sandbox path.
         kwargs.update(auto_tmm=False, use_download_path=False, download_path=None)
-        return self.api.add(urls, savepath=path, category=category, tags=all_tags, stopped=stopped, **kwargs)
+        return self.api.add(urls, torrent_files=torrent_files, savepath=path, category=category,
+                            tags=all_tags, stopped=stopped, **kwargs)
 
     def stop(self, hashes: str | Iterable[str]) -> None:
         self.api.stop(self._checked(hashes))

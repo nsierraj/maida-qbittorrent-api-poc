@@ -13,6 +13,16 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda seconds: None)
 
 
+@pytest.fixture(autouse=True)
+def dns(monkeypatch):
+    """No real DNS in tests: every name resolves to a public address unless a test says otherwise."""
+    from qbittorrent_poc import torrentfile
+
+    table: dict[str, list[str]] = {}
+    monkeypatch.setattr(torrentfile, "_resolve", lambda host, port: table.get(host, ["151.101.2.132"]))
+    return table
+
+
 @pytest.fixture
 def qbt(monkeypatch) -> FakeQbt:
     fake = FakeQbt()

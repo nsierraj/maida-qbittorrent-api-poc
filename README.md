@@ -20,7 +20,7 @@ Synology NAS. Sibling of [maida-synology-api-poc](https://github.com/nsierraj/ma
 | 2 | Per-torrent detail: properties, files, trackers, peers, log, sync | done, verified on the NAS 2026-10-09 |
 | 3 | Control inside a sandbox tag: add, stop/start, recheck, category, tags, location, rename, delete | done, verified on the NAS 2026-10-09 |
 | 4 | MCP server over stdio, wired into Claude Code | done, verified on the NAS 2026-10-09 |
-| 5 | HTTP transport, Docker image, Container Manager, reverse proxy | next |
+| 5 | HTTP transport, Docker image, Container Manager, reverse proxy | built; deploying |
 
 ## Setup
 
@@ -59,6 +59,8 @@ claude mcp add qbittorrent -- uv run --directory "$PWD" qbittorrent-mcp
 ```
 
 Read-only by default. `QBT_MCP_ALLOW_WRITES=true` adds the change tools, and `QBT_MCP_ALLOW_DELETE=true` the delete tool, always limited to the sandbox. See [docs/mcp-server.md](docs/mcp-server.md).
+
+It can also run as a container in Synology Container Manager, over HTTPS with a bearer token: see [Running in Container Manager](docs/mcp-server.md#running-in-container-manager).
 
 ## Tests
 

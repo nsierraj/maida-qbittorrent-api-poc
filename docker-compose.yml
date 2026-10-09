@@ -1,0 +1,27 @@
+# Container Manager project for the MCP server. Copy the repo to e.g. /volume1/docker/qbittorrent-mcp,
+# put a .env next to this file, then Container Manager → Project → Create → that folder.
+# See docs/mcp-server.md, "Running in Container Manager".
+services:
+  qbittorrent-mcp:
+    build: .
+    image: qbittorrent-mcp:local
+    container_name: qbittorrent-mcp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed here so a laptop .env can't switch the container back to stdio.
+      QBT_MCP_TRANSPORT: http
+      QBT_MCP_HOST: 0.0.0.0
+      QBT_MCP_PORT: "8000"
+    ports:
+      # Plain HTTP, reachable only from the NAS itself. DSM's reverse proxy adds TLS in front.
+      # 8766, not 8765: that one is the synology-mcp container's.
+      - "127.0.0.1:8766:8000"
+    security_opt:
+      - no-new-privileges:true
+    # The container reaches qBittorrent at QBT_HOST:QBT_PORT (the NAS LAN IP and gluetun's published
+    # WebUI port). Alternative: join gluetun's network and use QBT_HOST=gluetun (docs/mcp-server.md).
+    # networks: [synobridge]
+# networks:
+#   synobridge:
+#     external: true

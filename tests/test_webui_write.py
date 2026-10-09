@@ -54,6 +54,19 @@ def test_add_by_url_is_pending(api, qbt):
     assert api.list_torrents(hashes=[ARCH_HASH])
 
 
+def test_add_by_file_upload(api, qbt):
+    from .fake_qbt import ARCH_HASH, ARCH_TORRENT
+
+    answer = api.add(torrent_files=[("arch.torrent", ARCH_TORRENT)], savepath="/data/torrents/poc")
+    assert answer["added_torrent_ids"] == [ARCH_HASH] and answer["success_count"] == 1
+    assert api.list_torrents(hashes=[ARCH_HASH])[0]["has_metadata"]
+    with pytest.raises(QbtError):
+        api.add(torrent_files=[("arch.torrent", ARCH_TORRENT)])
+    with pytest.raises(QbtError) as exc:
+        api.add(torrent_files=[("junk.torrent", b"not bencode")])
+    assert exc.value.status == 415
+
+
 def test_legacy_text_answer_still_works(api, qbt):
     qbt.legacy_add_answer = True
     assert api.add([MAGNET]) == "Ok."
